@@ -20,16 +20,23 @@ set(HOST_SOURCES
     Engine/Core/Context.cpp         
     Engine/Scene/GeometryManager.cpp 
     Engine/Tracer/RayTracer.cpp
+
+    Engine/Tracer/RayGenerator.cpp
+
+    Engine/Tracer/ImageMethodSolver.cpp   # <--- [新增这一行！核心修复]
 # ---- 新增的点云转换器源文件 ----
     Engine/Scene/PointCloudConverter.cpp
     Engine/Scene/SceneManager.cpp
     Engine/Debug/Exporter3D.h
+     Engine/Tracer/ImageMethodKernel.cu 
 )
 
 # ==========================================
 # 2. 强制 NVCC 纯 PTX 编译 (核心修复区)
 # ==========================================
-set(PTX_SOURCES Ptx/device_programs.cu)
+set(PTX_SOURCES Ptx/device_programs.cu
+     # <--- [新增这行] 交给 NVCC 编译为原生对象
+)
 
 # 告诉 CMake 这是一个独立的对象库，专门用来处理 CUDA 文件
 add_library(DevicePrograms OBJECT ${PTX_SOURCES})

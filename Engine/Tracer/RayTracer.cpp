@@ -5,6 +5,8 @@
 #include <vector>
 #include "../Scene/GeometryManager.h" // [新增] 引入 GeometryManager
 #include "../../NimbusCommon/SbtData.h" // [新增] 引入 SBT 数据结构
+#include "../../NimbusCommon/LaunchParams.h"
+#include "SbrTypes.h" // [新增] 引入 SBR 结构定义
 
 namespace Engine {
 	namespace Tracer {
@@ -21,6 +23,11 @@ namespace Engine {
 			CUDA_CHECK(cudaMalloc((void**)&d_outHitNormalY, sizeof(float)));
 			CUDA_CHECK(cudaMalloc((void**)&d_outHitNormalZ, sizeof(float)));
 			CUDA_CHECK(cudaMalloc((void**)&d_outHitMaterial, sizeof(uint8_t)));
+
+			// ==================== [SBR 新增] ====================
+			// 为整条射线路径分配一块连续的显存
+			CUDA_CHECK(cudaMalloc((void**)&d_outSbrPath, sizeof(Engine::Tracer::RayPath)));
+			// ========================================================
 
 			CUDA_CHECK(cudaMalloc((void**)&d_params, sizeof(Engine::LaunchParams)));
 		}
@@ -99,6 +106,13 @@ namespace Engine {
 			safeFree(d_outHitStatus); safeFree(d_outHitX);
 			safeFree(d_outHitY); safeFree(d_outHitZ); safeFree(d_params);
 
+			// ==================== [SBR 新增] ====================
+			safeFree(d_outSbrPath);
+
+			// [阶段一新增] 释放大数组显存
+			safeFree(d_txRayDirections);
+			safeFree(d_outCandidateTopologies);
+
 			if (pipeline) optixPipelineDestroy(pipeline);
 			if (raygenPG) optixProgramGroupDestroy(raygenPG);
 			if (missPG) optixProgramGroupDestroy(missPG);
@@ -111,9 +125,46 @@ namespace Engine {
 			safeFree(reinterpret_cast<void*>(sbt.hitgroupRecordBase));
 		}
 
+		// ================== [SBR 专属追踪逻辑] ==================
+		void RayTracer::shootRaySBR(float ox, float oy, float oz, float dx, float dy, float dz,
+			Engine::Tracer::RayPath* out_hostPath,
+			Engine::Geometry::Point* d_globalCloud) {
+			// 1. 在发起光追前，清空显卡中的 SBR 路径缓存，确保不受上一帧的残留数据污染
+			Engine::Tracer::RayPath emptyPath = {};
+			emptyPath.nodeCount = 0;
+			emptyPath.isEscaped = false; // 初始状态
+			CUDA_CHECK(cudaMemcpy(d_outSbrPath, &emptyPath, sizeof(Engine::Tracer::RayPath), cudaMemcpyHostToDevice));
+
+			// 2. 将参数装入快递盒 (LaunchParams)
+			Engine::LaunchParams hostParams = {};
+			hostParams.handle = sceneHandle;
+			hostParams.rayOrigin_x = ox; hostParams.rayOrigin_y = oy; hostParams.rayOrigin_z = oz;
+			hostParams.rayDirection_x = dx; hostParams.rayDirection_y = dy; hostParams.rayDirection_z = dz;
+			hostParams.tmax = 1000.0f;
+
+			// [SBR 专属绑定]
+			hostParams.outSbrPath = d_outSbrPath;
+			hostParams.maxBounceDepth = Engine::Tracer::MAX_BOUNCE_DEPTH;
+			hostParams.globalPointCloud = d_globalCloud;
+
+			CUDA_CHECK(cudaMemcpy(d_params, &hostParams, sizeof(Engine::LaunchParams), cudaMemcpyHostToDevice));
+
+			// 3. 扣动扳机，启动 OptiX 射线追踪
+			OPTIX_CHECK(optixLaunch(
+				pipeline, 0, reinterpret_cast<CUdeviceptr>(d_params),
+				sizeof(Engine::LaunchParams), &sbt, 1, 1, 1
+			));
+			CUDA_CHECK(cudaDeviceSynchronize()); // 必须等显卡算完
+
+			// 4. 拆快递，把显卡算好的完整路径拷贝回 CPU 容器
+			if (out_hostPath) {
+				CUDA_CHECK(cudaMemcpy(out_hostPath, d_outSbrPath, sizeof(Engine::Tracer::RayPath), cudaMemcpyDeviceToHost));
+			}
+		}
+
 		void RayTracer::initPipelineAndSBT(const std::string& ptxPath, const Engine::Core::GeometryManager& geometryManager)
 		{
-			std::cout << "[Tracer] 正在读取 PTX 汇编文件: " << ptxPath << "\n";
+			// std::cout << "[Tracer] 正在读取 PTX 汇编文件: " << ptxPath << "\n";
 			std::ifstream ptxFile(ptxPath, std::ios::ate | std::ios::binary);
 			if (!ptxFile.is_open()) {
 				throw std::runtime_error("找不到 PTX 文件！请检查路径。");
@@ -130,7 +181,7 @@ namespace Engine {
 			OptixPipelineCompileOptions pipelineCompileOptions = {};
 			pipelineCompileOptions.usesMotionBlur = false;
 			pipelineCompileOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
-			pipelineCompileOptions.numPayloadValues = 1; // 我们的“小书包”里只有 1 个 uint32_t
+			pipelineCompileOptions.numPayloadValues = 2; // 我们的“小书包”里只有 1 个 uint32_t
 			pipelineCompileOptions.numAttributeValues = 2; // 三角形求交必备
 			pipelineCompileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
 			pipelineCompileOptions.pipelineLaunchParamsVariableName = "params"; // 必须与 .cu 中的变量名完全一致！
@@ -251,8 +302,113 @@ namespace Engine {
 			sbt.hitgroupRecordStrideInBytes = sizeof(Engine::HitGroupRecord);
 			sbt.hitgroupRecordCount = static_cast<uint32_t>(hgRecords.size());
 
-			std::cout << "[Tracer] 管线与 SBT 配置完成！共成功打包并上传了 "
-				<< hgRecords.size() << " 个 HitGroup Record 携带独立数据。\n";
+			// std::cout << "[Tracer] 管线与 SBT 配置完成！共成功打包并上传了 "<< hgRecords.size() << " 个 HitGroup Record 携带独立数据。\n";
+		}
+
+		// ================== [阶段一：SBR 批量发射与拓扑粗搜] ==================
+		void RayTracer::shootRaysBatchSBR(
+			const std::vector<float3>& host_txRays,
+			float tx_ox, float tx_oy, float tx_oz,
+			float rx_ox, float rx_oy, float rx_oz, float rx_radius,
+			std::vector<Engine::Tracer::PathTopology>& out_topologies,
+			Engine::Geometry::Point* d_globalCloud)
+		{
+			size_t numRays = host_txRays.size();
+			if (numRays == 0) return;
+
+			// 1. 动态显存管理：如果当前射线数量超过了显存容量，就重新分配更大的空间
+			if (numRays > allocatedRayCapacity) {
+				if (d_txRayDirections) cudaFree(d_txRayDirections);
+				if (d_outCandidateTopologies) cudaFree(d_outCandidateTopologies);
+
+				CUDA_CHECK(cudaMalloc((void**)&d_txRayDirections, numRays * sizeof(float3)));
+				CUDA_CHECK(cudaMalloc((void**)&d_outCandidateTopologies, numRays * sizeof(Engine::Tracer::PathTopology)));
+
+				allocatedRayCapacity = numRays;
+			}
+
+			// 2. 把 CPU 算好的斐波那契射线束拷贝到显卡
+			CUDA_CHECK(cudaMemcpy(d_txRayDirections, host_txRays.data(), numRays * sizeof(float3), cudaMemcpyHostToDevice));
+
+			// 初始化输出数组（清空上一帧的残留拓扑）
+			CUDA_CHECK(cudaMemset(d_outCandidateTopologies, 0, numRays * sizeof(Engine::Tracer::PathTopology)));
+
+			// 3. 装箱：配置新的 LaunchParams
+			Engine::LaunchParams hostParams = {};
+			hostParams.handle = sceneHandle;
+			hostParams.tmax = 1000.0f;
+			hostParams.maxBounceDepth = Engine::Tracer::MAX_BOUNCE_DEPTH;
+			hostParams.globalPointCloud = d_globalCloud;
+
+			// Tx 配置
+			hostParams.rayOrigin_x = tx_ox; hostParams.rayOrigin_y = tx_oy; hostParams.rayOrigin_z = tx_oz;
+			hostParams.txRayDirections = d_txRayDirections;
+			hostParams.numRays = static_cast<unsigned int>(numRays);
+
+			// Rx 配置
+			hostParams.rxPosition_x = rx_ox; hostParams.rxPosition_y = rx_oy; hostParams.rxPosition_z = rx_oz;
+			hostParams.rxRadius = rx_radius;
+
+			// 输出缓存配置
+			hostParams.outCandidateTopologies = d_outCandidateTopologies;
+
+			CUDA_CHECK(cudaMemcpy(d_params, &hostParams, sizeof(Engine::LaunchParams), cudaMemcpyHostToDevice));
+
+			// 4. 万箭齐发！注意这里的并行宽度从 1 变成了 numRays！
+			// OptiX 会在 GPU 上同时启动 numRays 个线程，每根射线独占一个线程！
+			OPTIX_CHECK(optixLaunch(
+				pipeline, 0, reinterpret_cast<CUdeviceptr>(d_params),
+				sizeof(Engine::LaunchParams), &sbt,
+				numRays, 1, 1  // <--- 这里的宽度变了！
+			));
+			CUDA_CHECK(cudaDeviceSynchronize());
+
+			// 5. 拆箱：把所有射线的拓扑账本拉回 CPU
+			out_topologies.resize(numRays);
+			CUDA_CHECK(cudaMemcpy(out_topologies.data(), d_outCandidateTopologies, numRays * sizeof(Engine::Tracer::PathTopology), cudaMemcpyDeviceToHost));
+		}
+
+		void RayTracer::validatePathsOptiX(std::vector<Engine::Tracer::ExactPath>& paths) {
+			if (paths.empty()) return;
+
+			// 1. 将精确路径推入 GPU
+			Engine::Tracer::ExactPath* d_paths = nullptr;
+			size_t bytes = paths.size() * sizeof(Engine::Tracer::ExactPath);
+			CUDA_CHECK(cudaMalloc((void**)&d_paths, bytes));
+			CUDA_CHECK(cudaMemcpy(d_paths, paths.data(), bytes, cudaMemcpyHostToDevice));
+
+			// 2. 配置 LaunchParams (完全参照 shootRaysBatchSBR 的变量命名)
+			Engine::LaunchParams hostParams = {};
+			hostParams.handle = sceneHandle;
+			hostParams.tmax = 1000.0f;
+
+			// 核心：绑定验证路径数组
+			hostParams.validationPaths = d_paths;
+			hostParams.numValidationPaths = static_cast<int>(paths.size());
+
+			// 必须确保其他模式的指针为空，防止 Device 端误触发 SBR 逻辑
+			hostParams.outCandidateTopologies = nullptr;
+			hostParams.outSbrPath = nullptr;
+			hostParams.txRayDirections = nullptr;
+
+			// 拷贝参数到显卡 (d_params 是类成员)
+			CUDA_CHECK(cudaMemcpy(d_params, &hostParams, sizeof(Engine::LaunchParams), cudaMemcpyHostToDevice));
+
+			// 3. 呼叫 OptiX (线程数等于路径数，使用 0 号流)
+			OPTIX_CHECK(optixLaunch(
+				pipeline, 0,
+				reinterpret_cast<CUdeviceptr>(d_params),
+				sizeof(Engine::LaunchParams),
+				&sbt,
+				static_cast<unsigned int>(paths.size()), 1, 1
+			));
+
+			// 4. 同步并取回结果
+			CUDA_CHECK(cudaDeviceSynchronize());
+			CUDA_CHECK(cudaMemcpy(paths.data(), d_paths, bytes, cudaMemcpyDeviceToHost));
+
+			// 5. 打扫战场
+			CUDA_CHECK(cudaFree(d_paths));
 		}
 	} // namespace Tracer
 } // namespace Engine

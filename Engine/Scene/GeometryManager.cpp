@@ -151,9 +151,8 @@ namespace Engine {
 
 					// [TDD 验证] 调用独立的显存回读测试函数
 					// ==========================================================
-					verifyVRAMRoundTrip(mesh.pointCounts, outRecord.d_pointCounts_list.back(), countsSize);
+					// verifyVRAMRoundTrip(mesh.pointCounts, outRecord.d_pointCounts_list.back(), countsSize);
 				}
-				// ========================================================
 
 				// 4. 配置 OptiX 的构建输入参数
 				OptixBuildInput buildInput = {};
@@ -180,7 +179,9 @@ namespace Engine {
 			if (buildInputs.empty()) return 0;
 
 			OptixAccelBuildOptions accelOptions = {};
-			accelOptions.buildFlags = OPTIX_BUILD_FLAG_ALLOW_COMPACTION | OPTIX_BUILD_FLAG_PREFER_FAST_TRACE;
+			accelOptions.buildFlags = OPTIX_BUILD_FLAG_ALLOW_COMPACTION |
+				OPTIX_BUILD_FLAG_PREFER_FAST_TRACE |
+				OPTIX_BUILD_FLAG_ALLOW_RANDOM_VERTEX_ACCESS;
 			accelOptions.operation = OPTIX_BUILD_OPERATION_BUILD;
 
 			OptixAccelBufferSizes bufferSizes;

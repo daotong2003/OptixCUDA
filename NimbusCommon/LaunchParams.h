@@ -1,11 +1,9 @@
 #pragma once
 #include <optix.h>
-#include <cstdint> // [Step 1 新增] 引入 cstdint 以支持 uint8_t 材质类型
+#include <cstdint>
 #include "Engine/Scene/MeshTypes.h"
+#include "Engine/Tracer/SbrTypes.h"
 
-// =======================================================
-// 【修复 1】前向声明：提前告诉编译器存在这个命名空间和结构体
-// =======================================================
 namespace Engine {
 	namespace Geometry {
 		struct Point;
@@ -13,28 +11,44 @@ namespace Engine {
 }
 
 namespace Engine {
-	// 这个结构体是 CPU 和 GPU 之间的数据“快递盒”
 	struct LaunchParams {
-		OptixTraversableHandle handle; // 场景的句柄
+		OptixTraversableHandle handle;
 
-		// 发射机  设置
-		float rayOrigin_x, rayOrigin_y, rayOrigin_z;
-		float rayDirection_x, rayDirection_y, rayDirection_z;
+		// ==================== [系统与物理参数] ====================
 		float tmax;
+		int maxBounceDepth;
+		Geometry::Point* globalPointCloud;
 
-		// 接收端 输出缓存
+		// ==================== [Tx 发射机配置 (批量)] ====================
+		float rayOrigin_x, rayOrigin_y, rayOrigin_z; // 发射机坐标
+
+		// 以前是单一方向，现在改为接收 CPU 算好的斐波那契射线束指针
+		float3* txRayDirections;
+		unsigned int numRays; // 总发射射线数量
+
+		// 兼容旧版：保留单一射线方向，用于单步调试
+		float rayDirection_x, rayDirection_y, rayDirection_z;
+
+		// ==================== [Rx 接收机配置 (虚拟捕获球)] ====================
+		float rxPosition_x, rxPosition_y, rxPosition_z;
+		float rxRadius; // 虚拟捕获球的半径
+
+		// ==================== [输出缓存] ====================
+		// 1. 旧版 LOS 输出缓存 (保留)
 		int* outHitStatus;
-		float* outHitPosition_x;
-		float* outHitPosition_y;
-		float* outHitPosition_z;
-
-		// ==================== [Step 1 新增] ====================
-		// 接收端 (Rx) 输出缓存 - 微观物理校准数据 (高精度法线与材质)
-		float* outHitNormal_x;
-		float* outHitNormal_y;
-		float* outHitNormal_z;
+		float* outHitPosition_x; float* outHitPosition_y; float* outHitPosition_z;
+		float* outHitNormal_x; float* outHitNormal_y; float* outHitNormal_z;
 		uint8_t* outHitMaterial;
 
-		Geometry::Point* globalPointCloud;
+		// 2. 旧版 SBR 单线物理缓存 (保留)
+		Tracer::RayPath* outSbrPath;
+
+		// 3. [阶段一新增] 粗搜拓扑候选者大数组，大小将等于 numRays
+		Tracer::PathTopology* outCandidateTopologies;
+
+		// [阶段三专属] 遮挡验证 (Shadow Ray Validation)
+		// =========================================================
+		Engine::Tracer::ExactPath* validationPaths; // 需要验证的精确路径数组
+		int numValidationPaths;                     // 路径总数
 	};
 } // namespace Engine
