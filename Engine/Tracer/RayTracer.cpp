@@ -32,9 +32,7 @@ namespace Engine {
 			CUDA_CHECK(cudaMalloc((void**)&d_params, sizeof(Engine::LaunchParams)));
 		}
 
-		// 记得在析构函数 ~RayTracer() 中加上：
-		// safeFree(d_outHitNormalX); safeFree(d_outHitNormalY); safeFree(d_outHitNormalZ); safeFree(d_outHitMaterial);
-
+#ifdef ENABLE_ENGINE_DEBUG
 		// ================== [重构射线的装箱与解包逻辑] ==================
 		void RayTracer::shootRay(float ox, float oy, float oz, float dx, float dy, float dz,
 			Engine::Geometry::Point* d_globalCloud) {
@@ -100,6 +98,7 @@ namespace Engine {
 				std::cout << "\n>>> [MISS] 射线射向了太空，未命中任何物体。\n";
 			}
 		}
+#endif
 
 		RayTracer::~RayTracer() {
 			auto safeFree = [](void* ptr) { if (ptr) cudaFree(ptr); };

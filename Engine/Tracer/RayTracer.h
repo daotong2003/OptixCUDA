@@ -21,10 +21,10 @@ namespace Engine {
 			RayTracer(OptixDeviceContext context, OptixTraversableHandle gasHandle);
 			~RayTracer();
 
-			// 在 RayTracer 类中
+#ifdef ENABLE_ENGINE_DEBUG
 			void shootRay(float ox, float oy, float oz, float dx, float dy, float dz,
 				Engine::Geometry::Point* d_globalCloud = nullptr);
-
+#endif
 			// 修改函数签名：追加 geometryManager 参数
 			void initPipelineAndSBT(const std::string& ptxPath, const Engine::Core::GeometryManager& geometryManager);
 

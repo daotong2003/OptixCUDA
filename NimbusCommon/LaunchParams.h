@@ -1,3 +1,4 @@
+// OptiX 管道每次发射（Launch）时的全局参数， CPU 向 GPU 传递任务配置和收集结果的总线
 #pragma once
 #include <optix.h>
 #include <cstdint>
@@ -21,8 +22,6 @@ namespace Engine {
 
 		// ==================== [Tx 发射机配置 (批量)] ====================
 		float rayOrigin_x, rayOrigin_y, rayOrigin_z; // 发射机坐标
-
-		// 以前是单一方向，现在改为接收 CPU 算好的斐波那契射线束指针
 		float3* txRayDirections;
 		unsigned int numRays; // 总发射射线数量
 
@@ -34,16 +33,16 @@ namespace Engine {
 		float rxRadius; // 虚拟捕获球的半径
 
 		// ==================== [输出缓存] ====================
-		// 1. 旧版 LOS 输出缓存 (保留)
+		// 旧版 LOS 输出缓存 (保留)
 		int* outHitStatus;
 		float* outHitPosition_x; float* outHitPosition_y; float* outHitPosition_z;
 		float* outHitNormal_x; float* outHitNormal_y; float* outHitNormal_z;
 		uint8_t* outHitMaterial;
 
-		// 2. 旧版 SBR 单线物理缓存 (保留)
+		// 旧版 SBR 单线物理缓存 (保留)
 		Tracer::RayPath* outSbrPath;
 
-		// 3. [阶段一新增] 粗搜拓扑候选者大数组，大小将等于 numRays
+		// [阶段一新增] 粗搜拓扑候选者大数组，大小将等于 numRays
 		Tracer::PathTopology* outCandidateTopologies;
 
 		// [阶段三专属] 遮挡验证 (Shadow Ray Validation)

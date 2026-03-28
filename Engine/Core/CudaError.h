@@ -1,6 +1,5 @@
-// include/CudaError.h
+// ´íÎó¼ì²éºê£¨Macros£©
 #pragma once
-
 #include <cuda_runtime.h>
 #include <optix.h>
 #include <optix_stubs.h>

@@ -28,7 +28,8 @@ set(HOST_SOURCES
     Engine/Scene/PointCloudConverter.cpp
     Engine/Scene/SceneManager.cpp
     Engine/Debug/Exporter3D.h
-     Engine/Tracer/ImageMethodKernel.cu 
+    Engine/Debug/PathExporter.h
+    Engine/Tracer/ImageMethodKernel.cu 
 )
 
 # ==========================================

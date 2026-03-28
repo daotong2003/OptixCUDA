@@ -1,5 +1,5 @@
 #include "SceneManager.h"
-#include "../Core/CudaError.h" // 确保引入您的错误检查宏
+#include "../Core/CudaError.h"
 #include <cuda_runtime.h>
 #include <cstring>
 #include <iostream>

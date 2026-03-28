@@ -1,15 +1,13 @@
-// 局部 2D 坐标系投影，使用贪心算法快速坍缩成最少量的多边形面片
+// 点云转化为 OptiX 能够处理的几何面片
 #include "PointCloudConverter.h"
 #include <fstream>
 #include <iostream>
 #include <cmath>
 #include <algorithm>
 #include <cstring>
-
-// [新增] 显式引入 CUDA 官方的 vector_functions，获取原生的 make_float3
 #include <vector_functions.h>
 
-// 辅助向量数学 (使用 CUDA 原生的 make_float3 保证绝对兼容，删除自定义的 make_float3)
+// 辅助向量数学
 inline float dot(float3 a, float3 b) {
 	return a.x * b.x + a.y * b.y + a.z * b.z;
 }
@@ -59,7 +57,7 @@ namespace Engine {
 				return false;
 			}
 
-			// 1. 跳过 ASCII 文件头，解析总点数
+			//  跳过 ASCII 文件头，解析总点数
 			std::string line;
 			size_t vertexCount = 0;
 			while (std::getline(file, line)) {
@@ -72,8 +70,8 @@ namespace Engine {
 			if (vertexCount == 0) return false;
 
 			// --- 在这里加一句打印 ---
-			std::cout << "[Debug] Parsed vertex count: " << vertexCount << std::endl;
-			std::cout << "[Debug] Expected memory: " << (vertexCount * sizeof(Point)) / (1024 * 1024) << " MB" << std::endl;
+			// std::cout << "[Debug] Parsed vertex count: " << vertexCount << std::endl;
+			// std::cout << "[Debug] Expected memory: " << (vertexCount * sizeof(Point)) / (1024 * 1024) << " MB" << std::endl;
 
 			outPoints.resize(vertexCount);
 
@@ -85,11 +83,9 @@ namespace Engine {
 
 		std::unordered_map<int32_t, std::vector<TriangleMesh>>
 			PointCloudConverter::convertToMeshes(const std::vector<Point>& rawPoints) {
-			// 获取全局索引的分组
 			auto groupedIndices = groupPointIndices(rawPoints);
 			std::unordered_map<int32_t, std::vector<TriangleMesh>> resultMeshes;
 
-			// 用于收集所有被贪心算法抛弃的零散点
 			std::vector<uint32_t> allResidualIndices;
 
 			for (const auto& instancePair : groupedIndices) {
@@ -97,7 +93,6 @@ namespace Engine {
 				for (const auto& labelPair : instancePair.second) {
 					const std::vector<uint32_t>& planeIndices = labelPair.second;
 
-					// 数据清洗：少于 30 个点的簇不适合做贪心平面，直接降级为离群点兜底处理
 					if (planeIndices.size() < 10) {
 						allResidualIndices.insert(allResidualIndices.end(), planeIndices.begin(), planeIndices.end());
 						continue;
@@ -105,14 +100,11 @@ namespace Engine {
 
 					TriangleMesh mesh = triangulatePlaneGreedy(rawPoints, planeIndices);
 					mesh.instance_id = instId;
-					// 从全局池中取第一个点的材质作为整个网格的材质
 					mesh.material_id = rawPoints[planeIndices[0]].material;
-
 					resultMeshes[instId].push_back(mesh);
 				}
 			}
 
-			// [核心兜底] 将所有未能成片的小碎点，转化为 1:1 的微网格，填补物理空洞
 			if (!allResidualIndices.empty()) {
 				std::cout << "[Converter] 触发防漏底机制，正在为 " << allResidualIndices.size()
 					<< " 个离群碎片点构建微网格..." << std::endl;
@@ -123,13 +115,11 @@ namespace Engine {
 			return resultMeshes;
 		}
 
-		// [优化] 内存零拷贝：仅收集全局数组的下标 (uint32_t)
 		std::unordered_map<int32_t, std::unordered_map<int32_t, std::vector<uint32_t>>>
 			PointCloudConverter::groupPointIndices(const std::vector<Point>& rawPoints) {
 			std::unordered_map<int32_t, std::unordered_map<int32_t, std::vector<uint32_t>>> groups;
 			for (uint32_t i = 0; i < rawPoints.size(); ++i) {
 				const auto& pt = rawPoints[i];
-				// 假设未分类的散点其 label 为一个特殊值（比如 -1），你可以在这里拦截
 				groups[pt.instance_id][pt.label].push_back(i);
 			}
 			return groups;
@@ -138,7 +128,6 @@ namespace Engine {
 		PointCloudConverter::PlaneBasis PointCloudConverter::computePlaneBasis(const std::vector<Point>& globalPoints, const std::vector<uint32_t>& indices) {
 			PlaneBasis basis;
 
-			// 计算几何中心与平均法线
 			float3 center = make_float3(0, 0, 0);
 			float3 avgNormal = make_float3(0, 0, 0);
 			for (uint32_t idx : indices) {
@@ -149,7 +138,6 @@ namespace Engine {
 			basis.origin = make_float3(center.x * invN, center.y * invN, center.z * invN);
 			basis.normal = normalize(avgNormal);
 
-			// 【核心修复】使用世界重力坐标系对齐 (World Up = Z)
 			// 绝不使用 PCA，保证所有的墙壁包围盒都是绝对横平竖直的，消除倾斜！
 			float3 worldUp = make_float3(0.0f, 0.0f, 1.0f);
 
@@ -218,9 +206,9 @@ namespace Engine {
 					}
 
 					// 极小值保护（防止点完全共线导致三角形面积为0）
-					float pad = 1e-4f;
-					if (cellMaxU - cellMinU < pad) { cellMinU -= pad; cellMaxU += pad; }
-					if (cellMaxV - cellMinV < pad) { cellMinV -= pad; cellMaxV += pad; }
+					float pad = 0.01f;
+					cellMinU -= pad; cellMaxU += pad;
+					cellMinV -= pad; cellMaxV += pad;
 
 					// 3. 生成紧致的 4 个顶点
 					uint32_t vIdx = static_cast<uint32_t>(mesh.vertices.size());
@@ -266,7 +254,7 @@ namespace Engine {
 			return mesh;
 		}
 
-		// --- [新增] 1:1 独立成面，确保 100% 物理还原 ---
+		// 1:1 独立成面，确保 100% 物理还原 ---
 		TriangleMesh PointCloudConverter::triangulateResidualPoints(const std::vector<Point>& globalPoints, const std::vector<uint32_t>& residualIndices) {
 			TriangleMesh mesh;
 			mesh.instance_id = 9999;
