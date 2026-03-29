@@ -91,6 +91,9 @@ namespace Engine {
 			for (const auto& instancePair : groupedIndices) {
 				int32_t instId = instancePair.first;
 				for (const auto& labelPair : instancePair.second) {
+
+					// 这里的 labelPair.first 就是最纯正的平面标签
+					int32_t planeLabel = labelPair.first;
 					const std::vector<uint32_t>& planeIndices = labelPair.second;
 
 					if (planeIndices.size() < 10) {
@@ -101,6 +104,9 @@ namespace Engine {
 					TriangleMesh mesh = triangulatePlaneGreedy(rawPoints, planeIndices);
 					mesh.instance_id = instId;
 					mesh.material_id = rawPoints[planeIndices[0]].material;
+
+					// [新增] 严格赋权！这个网格生成的所有三角形，绝对只属于这个 Label
+					mesh.plane_label = planeLabel;
 					resultMeshes[instId].push_back(mesh);
 				}
 			}
@@ -194,19 +200,27 @@ namespace Engine {
 					// 1. 遇到空白区域（真实缝隙、窗户）直接跳过，绝不填补
 					if (cellPts.empty()) continue;
 
-					// 2. 计算该网格内点云的【绝对精确】局部边界，实现 100% 紧致贴合，绝不越界
-					float cellMinU = 1e9f, cellMaxU = -1e9f;
-					float cellMinV = 1e9f, cellMaxV = -1e9f;
-					for (uint32_t globalIdx : cellPts) {
-						float3 localP = globalPoints[globalIdx].getPos() - basis.origin;
-						float u = dot(localP, basis.axisU);
-						float v = dot(localP, basis.axisV);
-						cellMinU = std::min(cellMinU, u); cellMaxU = std::max(cellMaxU, u);
-						cellMinV = std::min(cellMinV, v); cellMaxV = std::max(cellMaxV, v);
-					}
+					//// 2. 计算该网格内点云的【绝对精确】局部边界，实现 100% 紧致贴合，绝不越界
+					//float cellMinU = 1e9f, cellMaxU = -1e9f;
+					//float cellMinV = 1e9f, cellMaxV = -1e9f;
+					//for (uint32_t globalIdx : cellPts) {
+					//	float3 localP = globalPoints[globalIdx].getPos() - basis.origin;
+					//	float u = dot(localP, basis.axisU);
+					//	float v = dot(localP, basis.axisV);
+					//	cellMinU = std::min(cellMinU, u); cellMaxU = std::max(cellMaxU, u);
+					//	cellMinV = std::min(cellMinV, v); cellMaxV = std::max(cellMaxV, v);
+					//}
 
+					// 2. [修复] 强制使用理论网格边界，确保相邻三角形 100% 共边，消灭缝隙！
+					// 取消局部收缩，直接用循环索引 (i, j) 乘以 grid_size 推算绝对坐标
+					float cellMinU = minU + i * m_gridSize;
+					// 保护最边缘的网格不要超出真实点云的最大边界
+					float cellMaxU = std::min(minU + (i + 1) * m_gridSize, maxU);
+
+					float cellMinV = minV + j * m_gridSize;
+					float cellMaxV = std::min(minV + (j + 1) * m_gridSize, maxV);
 					// 极小值保护（防止点完全共线导致三角形面积为0）
-					float pad = 0.01f;
+					float pad = 0.1f;
 					cellMinU -= pad; cellMaxU += pad;
 					cellMinV -= pad; cellMaxV += pad;
 

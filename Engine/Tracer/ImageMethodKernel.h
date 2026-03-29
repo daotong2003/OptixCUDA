@@ -11,5 +11,13 @@ namespace Engine {
 			float3 tx, float3 rx,
 			ExactPath* d_out_paths
 		);
+		// [TDD Step 3 新增] 带有位图拦截器的新版 Kernel 启动器
+		// =========================================================
+		void launchImageMethodKernel_TEST(
+			const PathTopology* d_topologies, int num_topologies,
+			const LocalPlaneDictEntry* d_plane_dict, int num_planes,
+			float3 tx, float3 rx,
+			ExactPath* d_out_paths
+		);
 	} // namespace Tracer
 } // namespace Engine

@@ -30,33 +30,34 @@ static __forceinline__ __device__ void packPointer(void* ptr, uint32_t& i0, uint
 	i0 = uptr >> 32; i1 = uptr & 0x00000000ffffffff;
 }
 
+/*
 // [修复] 增加 int32_t& out_label
-__device__ __inline__ void findNearestPointAndExtract(
-	const Engine::HitGroupData* sbtData, unsigned int prim_idx, float3 hit_pt, float3& out_normal, uint8_t& out_material, int32_t& out_label) {
-	if (!sbtData->pointOffsets || !sbtData->pointCounts || !sbtData->pointIndices || !params.globalPointCloud) {
-		out_normal = make_float3(0.0f, 1.0f, 0.0f); out_material = 0; out_label = -1; return;
-	}
-	uint32_t offset = sbtData->pointOffsets[prim_idx];
-	uint32_t count = sbtData->pointCounts[prim_idx];
-	float min_dist_sq = 1e30f;
-	float3 best_normal = make_float3(0, 0, 0); uint8_t best_material = 0;
-	int32_t best_label = -1;
-
-	for (uint32_t i = 0; i < count; ++i) {
-		uint32_t pt_idx = sbtData->pointIndices[offset + i];
-		Engine::Geometry::Point pt = params.globalPointCloud[pt_idx];
-		float diff_x = hit_pt.x - pt.x; float diff_y = hit_pt.y - pt.y; float diff_z = hit_pt.z - pt.z;
-		float dist_sq = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-		if (dist_sq < min_dist_sq) {
-			min_dist_sq = dist_sq;
-			best_normal = make_float3(pt.nx, pt.ny, pt.nz);
-			best_material = pt.material;
-			best_label = pt.label; // 提取点云的平面标签
+	__device__ __inline__ void findNearestPointAndExtract(
+		const Engine::HitGroupData* sbtData, unsigned int prim_idx, float3 hit_pt, float3& out_normal, uint8_t& out_material, int32_t& out_label) {
+		if (!sbtData->pointOffsets || !sbtData->pointCounts || !sbtData->pointIndices || !params.globalPointCloud) {
+			out_normal = make_float3(0.0f, 1.0f, 0.0f); out_material = 0; out_label = -1; return;
 		}
-	}
-	out_normal = best_normal; out_material = best_material; out_label = best_label;
-}
+		uint32_t offset = sbtData->pointOffsets[prim_idx];
+		uint32_t count = sbtData->pointCounts[prim_idx];
+		float min_dist_sq = 1e30f;
+		float3 best_normal = make_float3(0, 0, 0); uint8_t best_material = 0;
+		int32_t best_label = -1;
 
+		for (uint32_t i = 0; i < count; ++i) {
+			uint32_t pt_idx = sbtData->pointIndices[offset + i];
+			Engine::Geometry::Point pt = params.globalPointCloud[pt_idx];
+			float diff_x = hit_pt.x - pt.x; float diff_y = hit_pt.y - pt.y; float diff_z = hit_pt.z - pt.z;
+			float dist_sq = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+			if (dist_sq < min_dist_sq) {
+				min_dist_sq = dist_sq;
+				best_normal = make_float3(pt.nx, pt.ny, pt.nz);
+				best_material = pt.material;
+				best_label = pt.label; // 提取点云的平面标签
+			}
+		}
+		out_normal = best_normal; out_material = best_material; out_label = best_label;
+	}
+*/
 // ... 前面的 PRD 定义和 findNearestPointAndExtract (记得加上 out_label) 保持更新后的样子 ...
 
 extern "C" __global__ void __closesthit__los() {
@@ -85,19 +86,19 @@ extern "C" __global__ void __closesthit__los() {
 	// =========================================================================
 
 	// ==================== [提取点云标签] ====================
-	float3 useless_normal; uint8_t real_material; int32_t real_label;
-	findNearestPointAndExtract(sbtData, prim_idx, hit_pt, useless_normal, real_material, real_label);
-
 	uint32_t p0 = optixGetPayload_0();
 	uint32_t p1 = optixGetPayload_1();
 	PerRayData* prd = (PerRayData*)unpackPointer(p0, p1);
 
 	prd->hit_pos = hit_pt;
-	prd->hit_normal = geo_normal;      // 写入绝对几何法线
-	prd->hit_material = real_material;
+	prd->hit_normal = geo_normal;
+	prd->hit_material = sbtData->material_id; // 从 sbt 直接拿
 	prd->hit_status = 1;
 	prd->hit_instance_id = sbtData->instance_id;
-	prd->hit_plane_label = real_label; // 写入真实的平面标签
+
+	// [终极极速] 直接 O(1) 提取专属 Label！彻底消灭微多径抖动！
+	prd->hit_plane_label = sbtData->plane_label;
+
 }
 
 extern "C" __global__ void __miss__los() {
@@ -201,39 +202,12 @@ extern "C" __global__ void __raygen__los() {
 			0, 1, 0, p0, p1
 		);
 
-		// 【解析几何】Rx 虚拟球相交检测 (线段到点的最短距离法)
-		float3 segment_end = (prd.hit_status == 1) ? prd.hit_pos :
-			make_float3(current_origin.x + params.tmax * current_dir.x,
-				current_origin.y + params.tmax * current_dir.y,
-				current_origin.z + params.tmax * current_dir.z);
-
-		float A_x = current_origin.x, A_y = current_origin.y, A_z = current_origin.z;
-		float B_x = segment_end.x, B_y = segment_end.y, B_z = segment_end.z;
-		float C_x = params.rxPosition_x, C_y = params.rxPosition_y, C_z = params.rxPosition_z;
-
-		float AB_x = B_x - A_x, AB_y = B_y - A_y, AB_z = B_z - A_z;
-		float AC_x = C_x - A_x, AC_y = C_y - A_y, AC_z = C_z - A_z;
-
-		float AB_sq = AB_x * AB_x + AB_y * AB_y + AB_z * AB_z;
-		float dot_AC_AB = AC_x * AB_x + AC_y * AB_y + AC_z * AB_z;
-
-		float t_proj = (AB_sq > 1e-8f) ? (dot_AC_AB / AB_sq) : 0.0f;
-		t_proj = fmaxf(0.0f, fminf(1.0f, t_proj));
-
-		float P_x = A_x + t_proj * AB_x, P_y = A_y + t_proj * AB_y, P_z = A_z + t_proj * AB_z;
-		float PC_x = C_x - P_x, PC_y = C_y - P_y, PC_z = C_z - P_z;
-		float dist_to_Rx = sqrt(PC_x * PC_x + PC_y * PC_y + PC_z * PC_z);
-
-		if (isBatchSBR && dist_to_Rx <= params.rxRadius) {
-			current_topo->hitRx = true;
-			current_topo->nodeCount = depth;
-			break;
-		}
-
 		if (prd.hit_status == 1) {
 			if (isBatchSBR) {
 				current_topo->nodes[depth].instance_id = prd.hit_instance_id;
 				current_topo->nodes[depth].plane_label = prd.hit_plane_label;
+				// 【核心】：每次击中都实时更新深度，无论最后是否飞向太空，这都是一条有效的残缺拓扑
+				current_topo->nodeCount = depth + 1;
 			}
 
 			if (isSingleSBR) {
@@ -256,10 +230,7 @@ extern "C" __global__ void __raygen__los() {
 			if (!isBatchSBR && !isSingleSBR) break;
 		}
 		else {
-			if (isBatchSBR) {
-				current_topo->hitRx = false;
-				current_topo->nodeCount = depth;
-			}
+			// 射线飞向太空，但它之前撞击表面的记录依然保留在 current_topo 中
 			if (isSingleSBR) params.outSbrPath->isEscaped = true;
 			break;
 		}

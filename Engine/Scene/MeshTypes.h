@@ -34,6 +34,9 @@ namespace Engine {
 			uint8_t material_id = 0;
 			int32_t instance_id = -1;
 
+			// [新增] 将平面标签直接绑定到整个 TriangleMesh 实例上！
+			int32_t plane_label = -1;
+
 			std::vector<uint32_t> pointOffsets;
 			std::vector<uint32_t> pointCounts;
 			std::vector<uint32_t> pointIndices;

@@ -27,6 +27,8 @@ namespace Engine {
 				std::vector<void*> d_pointIndices_list;
 
 				void* d_gas_output_buffer = nullptr;
+				// [新增] 存储每个网格的平面标签 (CPU 端数据，无需分配显存)
+				std::vector<int32_t> plane_label_list;
 			};
 
 			// 初始化

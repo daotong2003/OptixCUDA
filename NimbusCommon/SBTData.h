@@ -20,6 +20,9 @@ namespace Engine {
 		uint32_t* pointOffsets;
 		uint32_t* pointCounts;
 		uint32_t* pointIndices;
+
+		// [新增] O(1) 极速查找的专属平面标签
+		int32_t plane_label;
 	};
 
 	// OptiX 严格要求对齐的 SBT 记录模板

@@ -268,6 +268,9 @@ namespace Engine {
 					hg_rec.data.instance_id = instance_id;
 					hg_rec.data.material_id = 0; // 默认材质，可后续拓展
 
+					// [新增] 将账本里的 Label 严丝合缝地压入 SBT 寄存器！
+					hg_rec.data.plane_label = record.plane_label_list[i];
+
 					// 2. 塞入微观物理映射指针 (从 Step 3 的显卡地址中直接取)
 					if (!record.d_pointOffsets_list.empty() && i < record.d_pointOffsets_list.size()) {
 						hg_rec.data.pointOffsets = reinterpret_cast<uint32_t*>(record.d_pointOffsets_list[i]);

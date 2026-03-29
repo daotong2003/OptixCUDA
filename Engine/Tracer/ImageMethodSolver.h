@@ -22,6 +22,17 @@ namespace Engine {
 				const std::unordered_map<int32_t, PlaneEquation>& planeMap,
 				const float3& tx, const float3& rx);
 
+			// [TDD Step 3 新增] 带有 2D 占据位图拦截器的新版解析器
+			// =========================================================
+			static std::vector<ExactPath> solvePathsGPU_TEST(
+				const std::vector<PathTopology>& uniqueTopologies,
+				const std::unordered_map<int32_t, LocalPlaneDictEntry>& planeMap,
+				const float3& tx, const float3& rx);
+			// ==================== [阶段二数据基建] ====================
+			// [TDD 新增] 测试提取局部基底与投影降维的平行函数
+			static std::unordered_map<int32_t, LocalPlaneDictEntry> buildLocalPlaneMapFromCloud_TEST(
+				const std::vector<Engine::Geometry::Point>& globalCloud);
+
 		private:
 			static float3 mirrorPoint(const float3& pt, const PlaneEquation& plane);
 			static float3 intersectLinePlane(const float3& p1, const float3& p2, const PlaneEquation& plane, bool& out_intersected);

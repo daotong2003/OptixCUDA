@@ -5,7 +5,7 @@
 namespace Engine {
 	namespace Tracer {
 		// 【配置参数】定义 SBR 允许的最大弹跳深度
-		constexpr int MAX_BOUNCE_DEPTH = 5;
+		constexpr int MAX_BOUNCE_DEPTH = 3;
 
 		// =========================================================
 		// 1. 射线路径节点 (记录单次弹跳的微观/宏观物理快照)
@@ -66,6 +66,28 @@ namespace Engine {
 		struct PlaneDictEntry {
 			int32_t label;          // 平面标签
 			PlaneEquation eq;       // 平面方程
+		};
+
+		// [TDD 新增] 局部 2D 占据位图字典条目
+		// =========================================================
+		struct LocalPlaneDictEntry {
+			int32_t instance_id;
+			int32_t label;
+			PlaneEquation eq;       // 兼容旧版的世界平面方程
+
+			// 局部坐标系基底
+			float3 local_origin;
+			float3 axisU;
+			float3 axisV;
+
+			// 2D 投影包围盒与网格参数
+			float min_u, min_v;
+			float max_u, max_v;
+			float grid_size;
+			int cols, rows;
+
+			// 占据位图显存指针
+			bool* d_occupancy_bitmap;
 		};
 	} // namespace Tracer
 } // namespace Engine

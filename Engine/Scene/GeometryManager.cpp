@@ -107,6 +107,9 @@ namespace Engine {
 				const auto& mesh = meshes[i];
 				if (mesh.vertices.empty() || mesh.indices.empty()) continue;
 
+				// [新增] 将刚刚在 PointCloudConverter 中绑定的专属 Label 存入账本
+				outRecord.plane_label_list.push_back(mesh.plane_label);
+
 				// 1. 将顶点上传至显存
 				size_t verticesSizeInBytes = mesh.vertices.size() * sizeof(float3);
 				void* d_vertices;

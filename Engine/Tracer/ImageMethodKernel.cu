@@ -2,7 +2,7 @@
 #include "ImageMethodKernel.h"
 #include <cuda_runtime.h>
 #include <cmath>
-
+#include <cstdio>
 namespace Engine {
 	namespace Tracer {
 		// ==================== [设备端数学工具] ====================
@@ -113,5 +113,121 @@ namespace Engine {
 			int gridSize = (num_topologies + blockSize - 1) / blockSize;
 			solveExactPathsKernel << <gridSize, blockSize >> > (d_topologies, num_topologies, d_plane_dict, num_planes, tx, rx, d_out_paths);
 		}
+
+		// ========================================================================
+		// [TDD Step 3] 局部字典查找与 2D 位图拦截器核心 (修复版)
+		// ========================================================================
+		__device__ bool d_findLocalPlane_TEST(int32_t label, const LocalPlaneDictEntry* dict, int dictSize, LocalPlaneDictEntry& out_plane) {
+			int left = 0, right = dictSize - 1;
+			while (left <= right) {
+				int mid = left + (right - left) / 2;
+				if (dict[mid].label == label) { out_plane = dict[mid]; return true; }
+				if (dict[mid].label < label) left = mid + 1;
+				else right = mid - 1;
+			}
+			return false;
+		}
+
+		__global__ void solveExactPathsKernel_TEST(
+			const PathTopology* topologies, int num_topologies,
+			const LocalPlaneDictEntry* plane_dict, int num_planes,
+			float3 tx, float3 rx, ExactPath* out_paths)
+		{
+			int idx = blockIdx.x * blockDim.x + threadIdx.x;
+			if (idx >= num_topologies) return;
+
+			PathTopology topo = topologies[idx];
+
+			// 【修复 1】: PathTopology 的成员是 nodeCount
+			int numBounces = topo.nodeCount;
+
+			ExactPath path;
+
+			// 【修复 2】: ExactPath 包含发射点 Tx 和接收点 Rx，所以总顶点数是 bounces + 2
+			path.vertexCount = numBounces + 2;
+			path.isValid = false;
+
+			if (numBounces == 0 || numBounces > MAX_BOUNCE_DEPTH) { out_paths[idx] = path; return; }
+
+			// 1. 查字典获取局部平面信息
+			LocalPlaneDictEntry planes[MAX_BOUNCE_DEPTH];
+			for (int i = 0; i < numBounces; ++i) {
+				if (!d_findLocalPlane_TEST(topo.nodes[i].plane_label, plane_dict, num_planes, planes[i])) {
+					out_paths[idx] = path; return;
+				}
+			}
+
+			// 2. 正向镜像折叠 
+			float3 images[MAX_BOUNCE_DEPTH];
+			images[0] = d_mirrorPoint(tx, planes[0].eq);
+			for (int i = 1; i < numBounces; ++i) {
+				images[i] = d_mirrorPoint(images[i - 1], planes[i].eq);
+			}
+
+			// 3. 反向连线求交与 2D 占据位图拦截
+			float3 hitPoints[MAX_BOUNCE_DEPTH];
+			float3 currentTarget = rx;
+
+			for (int i = numBounces - 1; i >= 0; --i) {
+				float3 rayOrigin = images[i];
+				bool intersected = false;
+
+				// 计算绝对数学交点 p
+				float3 p = d_intersectLinePlane(rayOrigin, currentTarget, planes[i].eq, intersected);
+				if (!intersected) { out_paths[idx] = path; return; }
+
+				// --- [核心：物理边界极速拦截] ---
+				float3 diff = make_float3(p.x - planes[i].local_origin.x,
+					p.y - planes[i].local_origin.y,
+					p.z - planes[i].local_origin.z);
+
+				float u = diff.x * planes[i].axisU.x + diff.y * planes[i].axisU.y + diff.z * planes[i].axisU.z;
+				float v = diff.x * planes[i].axisV.x + diff.y * planes[i].axisV.y + diff.z * planes[i].axisV.z;
+
+				int u_idx = (int)((u - planes[i].min_u) / planes[i].grid_size);
+				int v_idx = (int)((v - planes[i].min_v) / planes[i].grid_size);
+
+				if (u_idx < 0 || u_idx >= planes[i].cols || v_idx < 0 || v_idx >= planes[i].rows) {
+					out_paths[idx] = path; return; // 拦截：超出物理包围盒
+				}
+
+				int bit_idx = v_idx * planes[i].cols + u_idx;
+				if (!planes[i].d_occupancy_bitmap[bit_idx]) {
+					out_paths[idx] = path; return; // 拦截：落入无点云空洞
+				}
+				// -------------------------------
+
+				hitPoints[i] = p;
+				currentTarget = p;
+			}
+
+			// 【修复 3】：严格按照 ExactPath 的 vertices 数组结构，填入 Tx、反射点、Rx
+			path.vertices[0] = tx; // 起点
+			for (int i = 0; i < numBounces; ++i) {
+				path.vertices[i + 1] = hitPoints[i]; // 中间的反射交点
+			}
+			path.vertices[numBounces + 1] = rx; // 终点
+
+			path.isValid = true;
+			out_paths[idx] = path;
+		}
+
+		void launchImageMethodKernel_TEST(
+			const PathTopology* d_topologies, int num_topologies,
+			const LocalPlaneDictEntry* d_plane_dict, int num_planes,
+			float3 tx, float3 rx, ExactPath* d_out_paths)
+		{
+			int blockSize = 256;
+			int gridSize = (num_topologies + blockSize - 1) / blockSize;
+			solveExactPathsKernel_TEST << <gridSize, blockSize >> > (
+				d_topologies, num_topologies, d_plane_dict, num_planes, tx, rx, d_out_paths);
+
+			// 【修复 4】：使用原生 CUDA API 错误捕获，直接打印错误字符串，避免对 CUDA_CHECK 宏的依赖
+			cudaError_t err = cudaGetLastError();
+			if (err != cudaSuccess) {
+				printf("Kernel Launch Error in launchImageMethodKernel_TEST: %s\n", cudaGetErrorString(err));
+			}
+		}
+
 	} // namespace Tracer
 } // namespace Engine
