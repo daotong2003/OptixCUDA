@@ -70,35 +70,45 @@ extern "C" __global__ void __closesthit__los() {
 
 	unsigned int prim_idx = optixGetPrimitiveIndex();
 
-	// ==================== [修复：获取三角形绝对几何法线] ====================
-	float3 v[3]; // OptiX API 要求必须传大小为 3 的数组
+	// =====================================================================
+	// 【安全模式】：使用官方 API，依赖 GeometryManager 中开启的随机访问标志
+	// =====================================================================
+	float3 v[3];
 	optixGetTriangleVertexData(optixGetGASTraversableHandle(), prim_idx, optixGetSbtGASIndex(), 0.0f, v);
 
 	float3 edge1 = make_float3(v[1].x - v[0].x, v[1].y - v[0].y, v[1].z - v[0].z);
 	float3 edge2 = make_float3(v[2].x - v[0].x, v[2].y - v[0].y, v[2].z - v[0].z);
 
-	// 叉乘并手动归一化 (防 CUDA 找不到 normalize)
+	// 叉乘计算局部几何法线
 	float nx = edge1.y * edge2.z - edge1.z * edge2.y;
 	float ny = edge1.z * edge2.x - edge1.x * edge2.z;
 	float nz = edge1.x * edge2.y - edge1.y * edge2.x;
 	float invLen = 1.0f / sqrtf(nx * nx + ny * ny + nz * nz);
-	float3 geo_normal = make_float3(nx * invLen, ny * invLen, nz * invLen);
-	// =========================================================================
 
-	// ==================== [提取点云标签] ====================
+	// 【防呆保护】：防止极小三角面导致法线退化
+	if (isnan(invLen) || isinf(invLen)) {
+		nx = 0.0f; ny = 1.0f; nz = 0.0f; invLen = 1.0f;
+	}
+
+	float3 geo_normal = make_float3(nx * invLen, ny * invLen, nz * invLen);
+
+	// 【世界坐标系转换】：必须保留！防止点云缩放或旋转导致反射乱飞
+	float3 world_normal = optixTransformNormalFromObjectToWorldSpace(geo_normal);
+	float wLen = sqrtf(world_normal.x * world_normal.x + world_normal.y * world_normal.y + world_normal.z * world_normal.z);
+	world_normal.x /= wLen; world_normal.y /= wLen; world_normal.z /= wLen;
+
+	// =====================================================================
+
 	uint32_t p0 = optixGetPayload_0();
 	uint32_t p1 = optixGetPayload_1();
 	PerRayData* prd = (PerRayData*)unpackPointer(p0, p1);
 
 	prd->hit_pos = hit_pt;
-	prd->hit_normal = geo_normal;
-	prd->hit_material = sbtData->material_id; // 从 sbt 直接拿
+	prd->hit_normal = world_normal; // 赋值绝对安全的物理法线
+	prd->hit_material = sbtData->material_id;
 	prd->hit_status = 1;
 	prd->hit_instance_id = sbtData->instance_id;
-
-	// [终极极速] 直接 O(1) 提取专属 Label！彻底消灭微多径抖动！
 	prd->hit_plane_label = sbtData->plane_label;
-
 }
 
 extern "C" __global__ void __miss__los() {
@@ -190,32 +200,37 @@ extern "C" __global__ void __raygen__los() {
 	uint32_t p0, p1;
 	int depth = 0;
 
+	// 在 __raygen__los 内部的 for 循环修改如下：
 	for (depth = 0; depth < max_depth; ++depth) {
 		prd.hit_status = 0;
 		packPointer(&prd, p0, p1);
 
-		// 发射硬件光追
+		// 【修复】：tmin 从 0.001f 提高到 0.005f，让射线初始就飞离微观粗糙表面
 		optixTrace(
 			params.handle, current_origin, current_dir,
-			0.001f, params.tmax, 0.0f,
+			0.005f, params.tmax, 0.0f,
 			OptixVisibilityMask(255), OPTIX_RAY_FLAG_DISABLE_ANYHIT,
 			0, 1, 0, p0, p1
 		);
 
 		if (prd.hit_status == 1) {
+			// 【同面黏滞过滤】：如果重复打在同一面墙上，不记录，将起点推远 5cm 后继续飞！
+			if (isBatchSBR && depth > 0 && current_topo->nodes[depth - 1].plane_label == prd.hit_plane_label) {
+				float3 N = prd.hit_normal;
+				current_origin = make_float3(prd.hit_pos.x + N.x * 0.05f, prd.hit_pos.y + N.y * 0.05f, prd.hit_pos.z + N.z * 0.05f);
+				depth--; // 抵消本次 depth 计数
+				continue;
+			}
+
 			if (isBatchSBR) {
 				current_topo->nodes[depth].instance_id = prd.hit_instance_id;
 				current_topo->nodes[depth].plane_label = prd.hit_plane_label;
-				// 【核心】：每次击中都实时更新深度，无论最后是否飞向太空，这都是一条有效的残缺拓扑
-				current_topo->nodeCount = depth + 1;
-			}
-
-			if (isSingleSBR) {
-				params.outSbrPath->nodes[depth].position = prd.hit_pos;
+				current_topo->nodeCount = depth + 1; // 严丝合缝地记录有效拓扑
 			}
 
 			float3 N = prd.hit_normal;
 			float dotIN = current_dir.x * N.x + current_dir.y * N.y + current_dir.z * N.z;
+			// 处理背面穿透
 			if (dotIN > 0.0f) { N.x = -N.x; N.y = -N.y; N.z = -N.z; dotIN = -dotIN; }
 
 			float3 reflect_dir = make_float3(
@@ -224,15 +239,17 @@ extern "C" __global__ void __raygen__los() {
 				current_dir.z - 2.0f * dotIN * N.z
 			);
 
-			current_origin = make_float3(prd.hit_pos.x + N.x * 0.005f, prd.hit_pos.y + N.y * 0.005f, prd.hit_pos.z + N.z * 0.005f);
+			// 更新下一跳起点，抬起 1cm
+			current_origin = make_float3(prd.hit_pos.x + N.x * 0.01f, prd.hit_pos.y + N.y * 0.01f, prd.hit_pos.z + N.z * 0.01f);
 			current_dir = reflect_dir;
+
+			// 【终极防呆】：万一还是出现 NaN（例如数学异常），立刻熔断，防止 GPU 死循环
+			if (isnan(current_dir.x) || isnan(current_dir.y) || isnan(current_dir.z)) break;
 
 			if (!isBatchSBR && !isSingleSBR) break;
 		}
 		else {
-			// 射线飞向太空，但它之前撞击表面的记录依然保留在 current_topo 中
-			if (isSingleSBR) params.outSbrPath->isEscaped = true;
-			break;
+			break; // 射向太空
 		}
 	}
 

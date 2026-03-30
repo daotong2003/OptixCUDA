@@ -70,7 +70,6 @@ std::vector<Engine::Tracer::PathTopology> extractUniqueTopologies(const std::vec
 // ========================================================================
 // #define ENABLE_ENGINE_DEBUG
 
-
 #include "Engine/Debug/Exporter3D.h"
 
 // 诊断函数 (仅在开启调试宏时编译)
@@ -126,7 +125,6 @@ void runSBRDiagnostics(
 	std::cout << ">>> [TDD Check] ----------------------------------------\n\n";
 }
 
-
 int main() {
 	try {
 		// ========================================================
@@ -144,10 +142,8 @@ int main() {
 		if (meshConverter.loadFromBinaryPLY("E:/RT_software/Clanguage/sy.ply", rawCloud)) {
 			sceneMeshes = meshConverter.convertToMeshes(rawCloud);
 
-
 			// 耗时操作：导出 OBJ 仅在调试模式下执行
 			Engine::Debug::Exporter3D::exportMeshesToOBJ(sceneMeshes, "debug_greedy_meshes.obj");
-
 
 			geometryManager.buildSceneGAS(sceneMeshes);
 		}
@@ -190,8 +186,8 @@ int main() {
 		std::vector<Engine::Tracer::PathTopology> candidateTopologies;
 
 		// 定义收发机参数
-		float3 tx_test = make_float3(9.0f, 6.0f, 1.5f);
-		float3 rx_test = make_float3(1.0f, 2.2f, 1.0f);
+		float3 tx_test = make_float3(26.5f, 4.0f, 2.0f);
+		float3 rx_test = make_float3(25.5f, 12.2f, 2.0f);
 		float rx_r = 0.5f;
 
 		// 发射加特林机枪

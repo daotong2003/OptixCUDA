@@ -184,7 +184,7 @@ namespace Engine {
 			OptixAccelBuildOptions accelOptions = {};
 			accelOptions.buildFlags = OPTIX_BUILD_FLAG_ALLOW_COMPACTION |
 				OPTIX_BUILD_FLAG_PREFER_FAST_TRACE |
-				OPTIX_BUILD_FLAG_ALLOW_RANDOM_VERTEX_ACCESS;
+				OPTIX_BUILD_FLAG_ALLOW_RANDOM_VERTEX_ACCESS | OPTIX_BUILD_FLAG_ALLOW_RANDOM_VERTEX_ACCESS;
 			accelOptions.operation = OPTIX_BUILD_OPERATION_BUILD;
 
 			OptixAccelBufferSizes bufferSizes;
