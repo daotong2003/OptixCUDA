@@ -7,6 +7,7 @@
 #include "../../NimbusCommon/SbtData.h" // [新增] 引入 SBT 数据结构
 #include "../../NimbusCommon/LaunchParams.h"
 #include "SbrTypes.h" // [新增] 引入 SBR 结构定义
+#include <algorithm> // Add this include at the top of the file to use std::sort
 
 namespace Engine {
 	namespace Tracer {
@@ -179,7 +180,7 @@ namespace Engine {
 			OptixModuleCompileOptions moduleCompileOptions = {};
 			OptixPipelineCompileOptions pipelineCompileOptions = {};
 			pipelineCompileOptions.usesMotionBlur = false;
-			pipelineCompileOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
+			pipelineCompileOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
 			pipelineCompileOptions.numPayloadValues = 2; // 我们的“小书包”里只有 1 个 uint32_t
 			pipelineCompileOptions.numAttributeValues = 2; // 三角形求交必备
 			pipelineCompileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
@@ -245,44 +246,41 @@ namespace Engine {
 			sbt.missRecordStrideInBytes = sizeof(Engine::MissRecord);
 			sbt.missRecordCount = 1;
 
-			// --- 4.3 [Step 4 核心] 动态组装 HitGroup Records ---
-			std::vector<Engine::HitGroupRecord> hgRecords;
+			// 在 initPipelineAndSBT 函数中，找到 "--- 4.3 [Step 4 核心] 动态组装 HitGroup Records ---"
+			// 替换下方的 for 循环逻辑：
 
-			// 从 GeometryManager 拿到我们在 Step 3 存好的所有显存大管家记录
+						// --- 4.3 [Step 4 核心] 动态组装 HitGroup Records ---
+			std::vector<Engine::HitGroupRecord> hgRecords;
 			const auto& allGasRecords = geometryManager.getGasRecords();
 
+			// 必须按相同的规则排序，否则 SBT 账本依然是对不上的
+			std::vector<int32_t> sorted_instances;
 			for (const auto& pair : allGasRecords) {
-				int32_t instance_id = pair.first;
-				const auto& record = pair.second;
+				sorted_instances.push_back(pair.first);
+			}
+			std::sort(sorted_instances.begin(), sorted_instances.end());
 
-				// 遍历该部件下的每一个三角形网格 (Mesh)
+			for (int32_t instance_id : sorted_instances) {
+				const auto& record = allGasRecords.at(instance_id);
+
 				for (size_t i = 0; i < record.d_vertices_list.size(); ++i) {
 					Engine::HitGroupRecord hg_rec = {};
-
-					// 打上 OptiX 内部的函数入口标记
 					OPTIX_CHECK(optixSbtRecordPackHeader(hitgroupPG, &hg_rec));
 
-					// 1. 塞入宏观网格指针
 					hg_rec.data.vertices = reinterpret_cast<float3*>(record.d_vertices_list[i]);
 					hg_rec.data.indices = reinterpret_cast<uint3*>(record.d_indices_list[i]);
 					hg_rec.data.instance_id = instance_id;
-					hg_rec.data.material_id = 0; // 默认材质，可后续拓展
-
-					// [新增] 将账本里的 Label 严丝合缝地压入 SBT 寄存器！
+					hg_rec.data.material_id = 0;
 					hg_rec.data.plane_label = record.plane_label_list[i];
 
-					// 2. 塞入微观物理映射指针 (从 Step 3 的显卡地址中直接取)
 					if (!record.d_pointOffsets_list.empty() && i < record.d_pointOffsets_list.size()) {
 						hg_rec.data.pointOffsets = reinterpret_cast<uint32_t*>(record.d_pointOffsets_list[i]);
 						hg_rec.data.pointCounts = reinterpret_cast<uint32_t*>(record.d_pointCounts_list[i]);
 						hg_rec.data.pointIndices = reinterpret_cast<uint32_t*>(record.d_pointIndices_list[i]);
 					}
 					else {
-						hg_rec.data.pointOffsets = nullptr;
-						hg_rec.data.pointCounts = nullptr;
-						hg_rec.data.pointIndices = nullptr;
+						hg_rec.data.pointOffsets = nullptr; hg_rec.data.pointCounts = nullptr; hg_rec.data.pointIndices = nullptr;
 					}
-
 					hgRecords.push_back(hg_rec);
 				}
 			}

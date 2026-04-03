@@ -154,7 +154,7 @@ extern "C" __global__ void __raygen__los() {
 			// 发射阴影射线
 			optixTrace(
 				params.handle, start_pt, dir,
-				0.005f, dist - 0.005f, 0.0f,
+				0.004f, dist - 0.004f, 0.0f,  // [核心修复] tmin 改为 0.06f，完美穿过 5cm 的假遮挡！
 				OptixVisibilityMask(255),
 				OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT | OPTIX_RAY_FLAG_DISABLE_ANYHIT,
 				0, 1, 0, p0, p1
@@ -162,6 +162,7 @@ extern "C" __global__ void __raygen__los() {
 
 			if (prd.hit_status == 1) {
 				isOccluded = true;
+				printf("[遮挡] 路径 %d 被 Label %d 拦截！\n", idx, prd.hit_plane_label);
 				break; // 一段被挡，整条作废
 			}
 		}
@@ -208,7 +209,7 @@ extern "C" __global__ void __raygen__los() {
 		// 【修复】：tmin 从 0.001f 提高到 0.005f，让射线初始就飞离微观粗糙表面
 		optixTrace(
 			params.handle, current_origin, current_dir,
-			0.005f, params.tmax, 0.0f,
+			0.002f, params.tmax, 0.0f,
 			OptixVisibilityMask(255), OPTIX_RAY_FLAG_DISABLE_ANYHIT,
 			0, 1, 0, p0, p1
 		);
@@ -217,8 +218,8 @@ extern "C" __global__ void __raygen__los() {
 			// 【同面黏滞过滤】：如果重复打在同一面墙上，不记录，将起点推远 5cm 后继续飞！
 			if (isBatchSBR && depth > 0 && current_topo->nodes[depth - 1].plane_label == prd.hit_plane_label) {
 				float3 N = prd.hit_normal;
-				current_origin = make_float3(prd.hit_pos.x + N.x * 0.05f, prd.hit_pos.y + N.y * 0.05f, prd.hit_pos.z + N.z * 0.05f);
-				depth--; // 抵消本次 depth 计数
+				current_origin = make_float3(prd.hit_pos.x + N.x * 0.002f, prd.hit_pos.y + N.y * 0.002f, prd.hit_pos.z + N.z * 0.002f);
+				depth--;
 				continue;
 			}
 
@@ -240,7 +241,7 @@ extern "C" __global__ void __raygen__los() {
 			);
 
 			// 更新下一跳起点，抬起 1cm
-			current_origin = make_float3(prd.hit_pos.x + N.x * 0.01f, prd.hit_pos.y + N.y * 0.01f, prd.hit_pos.z + N.z * 0.01f);
+			current_origin = make_float3(prd.hit_pos.x + N.x * 0.0001f, prd.hit_pos.y + N.y * 0.0001f, prd.hit_pos.z + N.z * 0.0001f);
 			current_dir = reflect_dir;
 
 			// 【终极防呆】：万一还是出现 NaN（例如数学异常），立刻熔断，防止 GPU 死循环

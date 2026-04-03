@@ -22,7 +22,8 @@ namespace Engine {
 			// 注册一个实例。
 			// instance_id: 您的部件 ID (如机械臂大臂 = 1)
 			// gas_handle: 上一步从 GeometryManager 获取的底层加速结构句柄
-			void addInstance(int32_t instance_id, OptixTraversableHandle gas_handle);
+			// 替换原来的声明
+			void addInstance(int32_t instance_id, OptixTraversableHandle gas_handle, uint32_t sbt_offset);
 
 			// ==========================================
 			// 核心动画/移动接口

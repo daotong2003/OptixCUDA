@@ -157,7 +157,7 @@ namespace Engine {
 				}
 			}
 
-			// 2. 正向镜像折叠 
+			// 2. 正向镜像折叠
 			float3 images[MAX_BOUNCE_DEPTH];
 			images[0] = d_mirrorPoint(tx, planes[0].eq);
 			for (int i = 1; i < numBounces; ++i) {
@@ -184,8 +184,17 @@ namespace Engine {
 				float u = diff.x * planes[i].axisU.x + diff.y * planes[i].axisU.y + diff.z * planes[i].axisU.z;
 				float v = diff.x * planes[i].axisV.x + diff.y * planes[i].axisV.y + diff.z * planes[i].axisV.z;
 
-				int u_idx = (int)((u - planes[i].min_u) / planes[i].grid_size);
-				int v_idx = (int)((v - planes[i].min_v) / planes[i].grid_size);
+				// 【修复 5】：增加 floorf 防止向零截断导致边缘坐标错乱！
+				int u_idx = (int)floorf((u - planes[i].min_u) / planes[i].grid_size);
+				int v_idx = (int)floorf((v - planes[i].min_v) / planes[i].grid_size);
+
+				// ==========================================================
+				// 【核心修正】：接住那些落在 5cm 容差边缘的交点，把它们拉回 0 号网格！
+				if (u_idx == -1) u_idx = 0;
+				if (u_idx == planes[i].cols) u_idx = planes[i].cols - 1;
+				if (v_idx == -1) v_idx = 0;
+				if (v_idx == planes[i].rows) v_idx = planes[i].rows - 1;
+				// ==========================================================
 
 				if (u_idx < 0 || u_idx >= planes[i].cols || v_idx < 0 || v_idx >= planes[i].rows) {
 					out_paths[idx] = path; return; // 拦截：超出物理包围盒
@@ -228,6 +237,5 @@ namespace Engine {
 				printf("Kernel Launch Error in launchImageMethodKernel_TEST: %s\n", cudaGetErrorString(err));
 			}
 		}
-
 	} // namespace Tracer
 } // namespace Engine

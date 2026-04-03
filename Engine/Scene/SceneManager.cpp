@@ -17,33 +17,50 @@ namespace Engine {
 			if (d_ias_output_buffer) cudaFree(d_ias_output_buffer);
 		}
 
-		void SceneManager::addInstance(int32_t instance_id, OptixTraversableHandle gas_handle) {
-			// 如果传入了无效句柄，直接拦截
+		//void SceneManager::addInstance(int32_t instance_id, OptixTraversableHandle gas_handle) {
+		//	// 如果传入了无效句柄，直接拦截
+		//	if (gas_handle == 0) return;
+
+		//	OptixInstance optixInst = {};
+
+		//	// 1. 初始化为单位矩阵 (无旋转、无平移，位于原点)
+		//	// OptiX 的 transform 是一个 3x4 的按行优先存储的仿射变换矩阵
+		//	const float identity[12] = {
+		//		1.0f, 0.0f, 0.0f, 0.0f,
+		//		0.0f, 1.0f, 0.0f, 0.0f,
+		//		0.0f, 0.0f, 1.0f, 0.0f
+		//	};
+		//	std::memcpy(optixInst.transform, identity, sizeof(float) * 12);
+
+		//	// 2. 设置实例专属属性
+		//	optixInst.instanceId = instance_id;        // 开放给 Shader 读取的 ID (optixGetInstanceId())
+		//	optixInst.sbtOffset = 0;                   // 着色器绑定表偏移量 (后续设置多材质时会用到)
+		//	optixInst.visibilityMask = 255;            // 射线可见性掩码 (默认全可见)
+		//	optixInst.flags = OPTIX_INSTANCE_FLAG_NONE; // 实例标志位
+		//	optixInst.traversableHandle = gas_handle;  // 挂载底层的 GAS 树！
+
+		//	// 3. 记录到 Host 端内存与映射表中
+		//	instanceIndexMap[instance_id] = hostInstances.size();
+		//	hostInstances.push_back(optixInst);
+		//}
+		// 替换原来的 addInstance 实现
+		void SceneManager::addInstance(int32_t instance_id, OptixTraversableHandle gas_handle, uint32_t sbt_offset) {
 			if (gas_handle == 0) return;
 
 			OptixInstance optixInst = {};
-
-			// 1. 初始化为单位矩阵 (无旋转、无平移，位于原点)
-			// OptiX 的 transform 是一个 3x4 的按行优先存储的仿射变换矩阵
-			const float identity[12] = {
-				1.0f, 0.0f, 0.0f, 0.0f,
-				0.0f, 1.0f, 0.0f, 0.0f,
-				0.0f, 0.0f, 1.0f, 0.0f
-			};
+			const float identity[12] = { 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f };
 			std::memcpy(optixInst.transform, identity, sizeof(float) * 12);
 
-			// 2. 设置实例专属属性
-			optixInst.instanceId = instance_id;        // 开放给 Shader 读取的 ID (optixGetInstanceId())
-			optixInst.sbtOffset = 0;                   // 着色器绑定表偏移量 (后续设置多材质时会用到)
-			optixInst.visibilityMask = 255;            // 射线可见性掩码 (默认全可见)
-			optixInst.flags = OPTIX_INSTANCE_FLAG_NONE; // 实例标志位
-			optixInst.traversableHandle = gas_handle;  // 挂载底层的 GAS 树！
+			optixInst.instanceId = instance_id;
+			// [核心修复] 使用外部传进来的累加偏移量，绝不能写死为 0
+			optixInst.sbtOffset = sbt_offset;
+			optixInst.visibilityMask = 255;
+			optixInst.flags = OPTIX_INSTANCE_FLAG_NONE;
+			optixInst.traversableHandle = gas_handle;
 
-			// 3. 记录到 Host 端内存与映射表中
 			instanceIndexMap[instance_id] = hostInstances.size();
 			hostInstances.push_back(optixInst);
 		}
-
 		void SceneManager::updateTransform(int32_t instance_id, const float transform[12]) {
 			auto it = instanceIndexMap.find(instance_id);
 			if (it != instanceIndexMap.end()) {

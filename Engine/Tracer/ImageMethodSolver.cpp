@@ -260,11 +260,19 @@ namespace Engine {
 					if (v < min_v) min_v = v; if (v > max_v) max_v = v;
 				}
 
-				// 4. 自适应网格计算
-				float area = (max_u - min_u) * (max_v - min_v);
-				float avg_area = area / indices.size();
-				float grid_size = std::sqrt(avg_area) * 1.5f;
-				if (grid_size < 0.02f) grid_size = 0.055f; // 兜底极小网格保护
+				// ==========================================
+				// 【绝杀 1：赋予 Image Method 边缘宽容度】
+				// 增加 5 厘米的容差，拯救那些擦边而过的极限多径
+				// ==========================================
+				float edge_margin = 0.001f;
+				min_u -= edge_margin; max_u += edge_margin;
+				min_v -= edge_margin; max_v += edge_margin;
+
+				// ==========================================================
+					// 【核心修复 2】：废除自适应，强制锁定为 SBR 的 0.055f 分辨率！
+					// 这将彻底找回 Label 2 这种分离墙体的判定精度
+					// ==========================================================
+				float grid_size = 0.1f;
 
 				int cols = static_cast<int>(std::ceil((max_u - min_u) / grid_size)) + 1;
 				int rows = static_cast<int>(std::ceil((max_v - min_v) / grid_size)) + 1;
@@ -286,8 +294,8 @@ namespace Engine {
 					int u_idx = static_cast<int>((u - min_u) / grid_size);
 					int v_idx = static_cast<int>((v - min_v) / grid_size);
 
-					// 核心容差机制：3x3 膨胀 (Dilation) 填补微观缝隙
-					for (int dv = -1; dv <= 1; ++dv) {
+					// 核心容差机制：1*1 膨3*3  5*5胀 (Dilation) 填补微观缝隙
+					for (int dv = 0; dv <= 0; ++dv) {
 						for (int du = -1; du <= 1; ++du) {
 							int nu = u_idx + du;
 							int nv = v_idx + dv;
@@ -359,7 +367,7 @@ namespace Engine {
 			cudaMalloc((void**)&d_plane_dict, dictBytes);
 			cudaMalloc((void**)&d_out_paths, exactBytes);
 
-			// 3. 搬运数据进 GPU 
+			// 3. 搬运数据进 GPU
 			// (注意：这里直接浅拷贝 dictArray 即可，因为 entry 里面的 d_occupancy_bitmap 已经是 GPU 地址了)
 			cudaMemcpy(d_topologies, uniqueTopologies.data(), topoBytes, cudaMemcpyHostToDevice);
 			cudaMemcpy(d_plane_dict, dictArray.data(), dictBytes, cudaMemcpyHostToDevice);

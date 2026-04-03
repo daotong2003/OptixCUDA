@@ -91,7 +91,6 @@ namespace Engine {
 			for (const auto& instancePair : groupedIndices) {
 				int32_t instId = instancePair.first;
 				for (const auto& labelPair : instancePair.second) {
-
 					// 这里的 labelPair.first 就是最纯正的平面标签
 					int32_t planeLabel = labelPair.first;
 					const std::vector<uint32_t>& planeIndices = labelPair.second;
@@ -164,6 +163,109 @@ namespace Engine {
 			return basis.origin + (u * basis.axisU) + (v * basis.axisV);
 		}
 
+		//TriangleMesh PointCloudConverter::triangulatePlaneGreedy(const std::vector<Point>& globalPoints, const std::vector<uint32_t>& planeIndices) {
+		//	TriangleMesh mesh;
+		//	PlaneBasis basis = computePlaneBasis(globalPoints, planeIndices);
+
+		//	float minU = 1e9f, maxU = -1e9f, minV = 1e9f, maxV = -1e9f;
+		//	for (uint32_t globalIdx : planeIndices) {
+		//		float3 localP = globalPoints[globalIdx].getPos() - basis.origin;
+		//		float u = dot(localP, basis.axisU);
+		//		float v = dot(localP, basis.axisV);
+		//		minU = std::min(minU, u); maxU = std::max(maxU, u);
+		//		minV = std::min(minV, v); maxV = std::max(maxV, v);
+		//	}
+
+		//	int cols = static_cast<int>(std::ceil((maxU - minU) / m_gridSize)) + 1;
+		//	int rows = static_cast<int>(std::ceil((maxV - minV) / m_gridSize)) + 1;
+
+		//	// 将点云分配到网格中
+		//	std::vector<std::vector<uint32_t>> gridPoints(cols * rows);
+		//	for (uint32_t globalIdx : planeIndices) {
+		//		float3 localP = globalPoints[globalIdx].getPos() - basis.origin;
+		//		int i = static_cast<int>((dot(localP, basis.axisU) - minU) / m_gridSize);
+		//		int j = static_cast<int>((dot(localP, basis.axisV) - minV) / m_gridSize);
+		//		if (i >= 0 && i < cols && j >= 0 && j < rows) {
+		//			gridPoints[j * cols + i].push_back(globalIdx);
+		//		}
+		//	}
+
+		//	// 【核心修复】彻底抛弃贪心合并与孔洞填补，采用“独立精确包围盒”策略
+		//	for (int j = 0; j < rows; ++j) {
+		//		for (int i = 0; i < cols; ++i) {
+		//			int cellIndex = j * cols + i;
+		//			const auto& cellPts = gridPoints[cellIndex];
+
+		//			// 1. 遇到空白区域（真实缝隙、窗户）直接跳过，绝不填补
+		//			if (cellPts.empty()) continue;
+
+		//			//// 2. 计算该网格内点云的【绝对精确】局部边界，实现 100% 紧致贴合，绝不越界
+		//			//float cellMinU = 1e9f, cellMaxU = -1e9f;
+		//			//float cellMinV = 1e9f, cellMaxV = -1e9f;
+		//			//for (uint32_t globalIdx : cellPts) {
+		//			//	float3 localP = globalPoints[globalIdx].getPos() - basis.origin;
+		//			//	float u = dot(localP, basis.axisU);
+		//			//	float v = dot(localP, basis.axisV);
+		//			//	cellMinU = std::min(cellMinU, u); cellMaxU = std::max(cellMaxU, u);
+		//			//	cellMinV = std::min(cellMinV, v); cellMaxV = std::max(cellMaxV, v);
+		//			//}
+
+		//			// 2. [修复] 强制使用理论网格边界，确保相邻三角形 100% 共边，消灭缝隙！
+		//			// 取消局部收缩，直接用循环索引 (i, j) 乘以 grid_size 推算绝对坐标
+		//			float cellMinU = minU + i * m_gridSize;
+		//			// 保护最边缘的网格不要超出真实点云的最大边界
+		//			float cellMaxU = std::min(minU + (i + 1) * m_gridSize, maxU);
+
+		//			float cellMinV = minV + j * m_gridSize;
+		//			float cellMaxV = std::min(minV + (j + 1) * m_gridSize, maxV);
+		//			// 极小值保护（防止点完全共线导致三角形面积为0）
+		//			float pad = 0.1f;
+		//			cellMinU -= pad; cellMaxU += pad;
+		//			cellMinV -= pad; cellMaxV += pad;
+
+		//			// 3. 生成紧致的 4 个顶点
+		//			uint32_t vIdx = static_cast<uint32_t>(mesh.vertices.size());
+		//			mesh.vertices.push_back(calculate3DPos(basis, cellMinU, cellMinV));
+		//			mesh.vertices.push_back(calculate3DPos(basis, cellMaxU, cellMinV));
+		//			mesh.vertices.push_back(calculate3DPos(basis, cellMaxU, cellMaxV));
+		//			mesh.vertices.push_back(calculate3DPos(basis, cellMinU, cellMaxV));
+
+		//			mesh.indices.push_back({ vIdx, vIdx + 1, vIdx + 2 });
+		//			mesh.indices.push_back({ vIdx, vIdx + 2, vIdx + 3 });
+
+		//			// 4. 将点分配给两个三角形
+		//			std::vector<uint32_t> tri0_indices;
+		//			std::vector<uint32_t> tri1_indices;
+		//			float du = cellMaxU - cellMinU;
+		//			float dv = cellMaxV - cellMinV;
+
+		//			for (uint32_t globalIdx : cellPts) {
+		//				float3 localP = globalPoints[globalIdx].getPos() - basis.origin;
+		//				float u = dot(localP, basis.axisU);
+		//				float v = dot(localP, basis.axisV);
+		//				float norm_u = (du > 1e-6f) ? (u - cellMinU) / du : 0.0f;
+		//				float norm_v = (dv > 1e-6f) ? (v - cellMinV) / dv : 0.0f;
+
+		//				if (norm_u > norm_v) tri0_indices.push_back(globalIdx);
+		//				else tri1_indices.push_back(globalIdx);
+		//			}
+
+		//			// 5. 【防零点机制】如果对角线划分恰好导致某个三角形内没有点
+		//			// 从隔壁三角形借用一个真实点作为代理，消灭 Original CPU: 0
+		//			if (tri0_indices.empty() && !tri1_indices.empty()) tri0_indices.push_back(tri1_indices.front());
+		//			if (tri1_indices.empty() && !tri0_indices.empty()) tri1_indices.push_back(tri0_indices.front());
+
+		//			mesh.pointOffsets.push_back(static_cast<uint32_t>(mesh.pointIndices.size()));
+		//			mesh.pointCounts.push_back(static_cast<uint32_t>(tri0_indices.size()));
+		//			mesh.pointIndices.insert(mesh.pointIndices.end(), tri0_indices.begin(), tri0_indices.end());
+
+		//			mesh.pointOffsets.push_back(static_cast<uint32_t>(mesh.pointIndices.size()));
+		//			mesh.pointCounts.push_back(static_cast<uint32_t>(tri1_indices.size()));
+		//			mesh.pointIndices.insert(mesh.pointIndices.end(), tri1_indices.begin(), tri1_indices.end());
+		//		}
+		//	}
+		//	return mesh;
+		//}
 		TriangleMesh PointCloudConverter::triangulatePlaneGreedy(const std::vector<Point>& globalPoints, const std::vector<uint32_t>& planeIndices) {
 			TriangleMesh mesh;
 			PlaneBasis basis = computePlaneBasis(globalPoints, planeIndices);
@@ -177,54 +279,36 @@ namespace Engine {
 				minV = std::min(minV, v); maxV = std::max(maxV, v);
 			}
 
-			int cols = static_cast<int>(std::ceil((maxU - minU) / m_gridSize)) + 1;
-			int rows = static_cast<int>(std::ceil((maxV - minV) / m_gridSize)) + 1;
+			// 【关键 1】：10cm 大网格，单格必包含多个点，内部 100% 绝对水密，且不会遮挡 4 米大门
+			float local_gridSize = 0.10f;
+			int cols = static_cast<int>(std::ceil((maxU - minU) / local_gridSize)) + 1;
+			int rows = static_cast<int>(std::ceil((maxV - minV) / local_gridSize)) + 1;
 
-			// 将点云分配到网格中
 			std::vector<std::vector<uint32_t>> gridPoints(cols * rows);
 			for (uint32_t globalIdx : planeIndices) {
 				float3 localP = globalPoints[globalIdx].getPos() - basis.origin;
-				int i = static_cast<int>((dot(localP, basis.axisU) - minU) / m_gridSize);
-				int j = static_cast<int>((dot(localP, basis.axisV) - minV) / m_gridSize);
+				int i = static_cast<int>((dot(localP, basis.axisU) - minU) / local_gridSize);
+				int j = static_cast<int>((dot(localP, basis.axisV) - minV) / local_gridSize);
 				if (i >= 0 && i < cols && j >= 0 && j < rows) {
 					gridPoints[j * cols + i].push_back(globalIdx);
 				}
 			}
 
-			// 【核心修复】彻底抛弃贪心合并与孔洞填补，采用“独立精确包围盒”策略
 			for (int j = 0; j < rows; ++j) {
 				for (int i = 0; i < cols; ++i) {
 					int cellIndex = j * cols + i;
-					const auto& cellPts = gridPoints[cellIndex];
+					if (gridPoints[cellIndex].empty()) continue; // 保留真实大门/窗户
 
-					// 1. 遇到空白区域（真实缝隙、窗户）直接跳过，绝不填补
-					if (cellPts.empty()) continue;
+					float cellMinU = minU + i * local_gridSize;
+					float cellMaxU = std::min(minU + (i + 1) * local_gridSize, maxU);
+					float cellMinV = minV + j * local_gridSize;
+					float cellMaxV = std::min(minV + (j + 1) * local_gridSize, maxV);
 
-					//// 2. 计算该网格内点云的【绝对精确】局部边界，实现 100% 紧致贴合，绝不越界
-					//float cellMinU = 1e9f, cellMaxU = -1e9f;
-					//float cellMinV = 1e9f, cellMaxV = -1e9f;
-					//for (uint32_t globalIdx : cellPts) {
-					//	float3 localP = globalPoints[globalIdx].getPos() - basis.origin;
-					//	float u = dot(localP, basis.axisU);
-					//	float v = dot(localP, basis.axisV);
-					//	cellMinU = std::min(cellMinU, u); cellMaxU = std::max(cellMaxU, u);
-					//	cellMinV = std::min(cellMinV, v); cellMaxV = std::max(cellMaxV, v);
-					//}
-
-					// 2. [修复] 强制使用理论网格边界，确保相邻三角形 100% 共边，消灭缝隙！
-					// 取消局部收缩，直接用循环索引 (i, j) 乘以 grid_size 推算绝对坐标
-					float cellMinU = minU + i * m_gridSize;
-					// 保护最边缘的网格不要超出真实点云的最大边界
-					float cellMaxU = std::min(minU + (i + 1) * m_gridSize, maxU);
-
-					float cellMinV = minV + j * m_gridSize;
-					float cellMaxV = std::min(minV + (j + 1) * m_gridSize, maxV);
-					// 极小值保护（防止点完全共线导致三角形面积为0）
-					float pad = 0.1f;
+					// 【关键 2】：1 厘米黄金封边！完美封死墙角缝隙，且不会干扰射线！
+					float pad = 0.01f;
 					cellMinU -= pad; cellMaxU += pad;
 					cellMinV -= pad; cellMaxV += pad;
 
-					// 3. 生成紧致的 4 个顶点
 					uint32_t vIdx = static_cast<uint32_t>(mesh.vertices.size());
 					mesh.vertices.push_back(calculate3DPos(basis, cellMinU, cellMinV));
 					mesh.vertices.push_back(calculate3DPos(basis, cellMaxU, cellMinV));
@@ -234,25 +318,17 @@ namespace Engine {
 					mesh.indices.push_back({ vIdx, vIdx + 1, vIdx + 2 });
 					mesh.indices.push_back({ vIdx, vIdx + 2, vIdx + 3 });
 
-					// 4. 将点分配给两个三角形
-					std::vector<uint32_t> tri0_indices;
-					std::vector<uint32_t> tri1_indices;
-					float du = cellMaxU - cellMinU;
-					float dv = cellMaxV - cellMinV;
-
-					for (uint32_t globalIdx : cellPts) {
+					// ... 后续点云索引分配逻辑保持不变 ...
+					std::vector<uint32_t> tri0_indices, tri1_indices;
+					float du = cellMaxU - cellMinU, dv = cellMaxV - cellMinV;
+					for (uint32_t globalIdx : gridPoints[cellIndex]) {
 						float3 localP = globalPoints[globalIdx].getPos() - basis.origin;
-						float u = dot(localP, basis.axisU);
-						float v = dot(localP, basis.axisV);
+						float u = dot(localP, basis.axisU), v = dot(localP, basis.axisV);
 						float norm_u = (du > 1e-6f) ? (u - cellMinU) / du : 0.0f;
 						float norm_v = (dv > 1e-6f) ? (v - cellMinV) / dv : 0.0f;
-
 						if (norm_u > norm_v) tri0_indices.push_back(globalIdx);
 						else tri1_indices.push_back(globalIdx);
 					}
-
-					// 5. 【防零点机制】如果对角线划分恰好导致某个三角形内没有点
-					// 从隔壁三角形借用一个真实点作为代理，消灭 Original CPU: 0
 					if (tri0_indices.empty() && !tri1_indices.empty()) tri0_indices.push_back(tri1_indices.front());
 					if (tri1_indices.empty() && !tri0_indices.empty()) tri1_indices.push_back(tri0_indices.front());
 
@@ -267,7 +343,6 @@ namespace Engine {
 			}
 			return mesh;
 		}
-
 		// 1:1 独立成面，确保 100% 物理还原 ---
 		TriangleMesh PointCloudConverter::triangulateResidualPoints(const std::vector<Point>& globalPoints, const std::vector<uint32_t>& residualIndices) {
 			TriangleMesh mesh;
