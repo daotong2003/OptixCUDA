@@ -197,13 +197,22 @@ void runSBRDiagnostics(
 
 int main() {
 	try {
+		
+		std::cout << ">>> [Zero-Copy Check] ExactPath Memory Layout:\n";
+		std::cout << "  - Total Size  : " << sizeof(Engine::Tracer::ExactPath) << " bytes (Expected: 80)\n";
+		std::cout << "  - vertices offset   : " << offsetof(Engine::Tracer::ExactPath, vertices) << " (Expected: 0)\n";
+		std::cout << "  - hit_objects offset: " << offsetof(Engine::Tracer::ExactPath, hit_objects) << " (Expected: 60)\n";
+		std::cout << "  - vertexCount offset: " << offsetof(Engine::Tracer::ExactPath, vertexCount) << " (Expected: 72)\n";
+		std::cout << "  - isValid offset    : " << offsetof(Engine::Tracer::ExactPath, isValid) << " (Expected: 76)\n";
+		std::cout << "--------------------------------------------------------\n";
+		
 		// ========================================================
 		// [阶段零] 引擎初始化与物理场景构建 (Infrastructure)
 		// ========================================================
 		Engine::Core::OptixContextManager optixManager;
 		Engine::Core::GeometryManager geometryManager(optixManager.getContext());
 		Engine::Core::SceneManager sceneManager(optixManager.getContext());
-		Engine::Geometry::PointCloudConverter meshConverter(0.3f);
+		Engine::Geometry::PointCloudConverter meshConverter(0.5f);
 
 		std::vector<Engine::Geometry::Point> rawCloud;
 		std::unordered_map<int32_t, std::vector<Engine::Geometry::TriangleMesh>> sceneMeshes;
@@ -246,7 +255,7 @@ int main() {
 		// (注意：这里假设您的获取函数叫 getIASHandle()，如果叫 getRootHandle() 或其他名字请自行替换)
 		OptixTraversableHandle traceHandle = sceneManager.getIasHandle();
 		Engine::Tracer::RayTracer tracer(optixManager.getContext(), traceHandle);
-		tracer.initPipelineAndSBT("E:/RT_software/Clanguage/OptixCUDA/out/build/x64-Debug/Ptx/device_programs.ptx", geometryManager);
+		tracer.initPipelineAndSBT("E:/RT_software/Clanguage/PointRT/out/build/x64-Debug/Ptx/device_programs.ptx", geometryManager);
 
 		// 将全局点云推入显存供射线使用
 		Engine::Geometry::Point* d_globalCloud = nullptr;
@@ -359,8 +368,8 @@ int main() {
 		// [新增功能] 动画/快照生成：移动 IAS 并连续追踪
 		// ========================================================================
 		int target_instance_id = 4; // 【请修改】这里填入你想要移动的部件的 instance_id
-		int num_snapshots = 20;     // 生成 25 个快照
-		float total_move_y = 8.0f;  // 向 +Y 轴移动总距离 5 米
+		int num_snapshots = 1;     // 生成 25 个快照
+		float total_move_y = 0.0f;  // 向 +Y 轴移动总距离 5 米
 
 		size_t testRayCount = 2000000;
 		std::cout << "\n>>> 准备批量射线 " << testRayCount << " 条...\n";
@@ -422,6 +431,20 @@ int main() {
 				Engine::Tracer::ImageMethodSolver::solvePathsGPU_TEST(uniqueTopologies, current_localPlaneDict, tx_test, rx_test);
 
 			tracer.validatePathsOptiX(finalPaths);
+
+			// [新增 GPU 回读验证] 随机挑一条有效路径，打印它的内存装填情况
+		// ========================================================================
+			for (size_t i = 0; i < finalPaths.size(); ++i) {
+				if (finalPaths[i].isValid && finalPaths[i].vertexCount > 2) {
+					int bounces = finalPaths[i].vertexCount - 2;
+					std::cout << "\n>>> [GPU Write Check] 找到一条有效多径，弹跳次数: " << bounces << "\n";
+					for (int b = 0; b < bounces; ++b) {
+						std::cout << "  - 第 " << b + 1 << " 次反射击中的物体 Label: "
+							<< finalPaths[i].hit_objects[b] << "\n";
+					}
+					break; // 打印一条就足够验证了
+				}
+			}
 
 			int ultimateValidCount = 0;
 			for (const auto& p : finalPaths) {

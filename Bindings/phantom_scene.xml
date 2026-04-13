@@ -1,0 +1,17 @@
+<scene version="2.0.0">
+
+        <shape type="obj" id="label_6">
+            <string name="filename" value="dummy_phantom.obj"/>
+        </shape>
+        
+
+        <shape type="obj" id="label_14">
+            <string name="filename" value="dummy_phantom.obj"/>
+        </shape>
+        
+
+        <shape type="obj" id="label_2">
+            <string name="filename" value="dummy_phantom.obj"/>
+        </shape>
+        
+</scene>

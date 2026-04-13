@@ -1,16 +1,21 @@
-// 强制指定版本： 通过 cmakeCommandArgs 注入 -T v143,version=14.36.17.6
-
 {
-	"configurations": [
-		{
-			"name": "x64-Debug",
-			"generator": "Visual Studio 17 2022 Win64",
-			"configurationType": "Debug",
-			"buildRoot": "${projectDir}\\out\\build\\${name}",
-			"installRoot": "${projectDir}\\out\\install\\${name}",
-			"cmakeCommandArgs": "-T v143,version=14.36.17.6",
-			"buildCommandArgs": "",
-			"ctestCommandArgs": ""
-		}
-	]
+  "configurations": [
+    {
+      "name": "x64-RelWithDebInfo",
+      "generator": "Visual Studio 17 2022 Win64",
+      "configurationType": "RelWithDebInfo",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "-T v143,version=14.36.17.6",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "variables": [
+        {
+          "name": "Python_EXECUTABLE",
+          "value": "D:/Anaconda3File/envs/sionna-1/python.exe",
+          "type": "FILEPATH"
+        }
+      ]
+    }
+  ]
 }

@@ -12,11 +12,11 @@ if (NOT OPTIX_8_0_PATH)
     message(FATAL_ERROR "OPTIX_8_0_PATH variable not set" )
 endif()
 
-# ==========================================
+
 # 1. 收集主机端源文件 (不再包含 .cu 文件)
-# ==========================================
+
 set(HOST_SOURCES 
-    main.cpp 
+    # main.cpp 
     Engine/Core/Context.cpp         
     Engine/Scene/GeometryManager.cpp 
     Engine/Tracer/RayTracer.cpp
@@ -32,12 +32,18 @@ set(HOST_SOURCES
     Engine/Tracer/ImageMethodKernel.cu 
 )
 
-# ==========================================
-# 2. 强制 NVCC 纯 PTX 编译 (核心修复区)
-# ==========================================
-set(PTX_SOURCES Ptx/device_programs.cu
-     # <--- [新增这行] 交给 NVCC 编译为原生对象
+# 构建静态库供复用
+add_library(OptixEngineCore STATIC ${HOST_SOURCES})
+target_include_directories(OptixEngineCore PUBLIC
+    ${PROJECT_SOURCE_DIR}
+    ${OPTIX_8_0_PATH}/include
+    ${CUDAToolkit_INCLUDE_DIRS}
 )
+target_link_libraries(OptixEngineCore PUBLIC CUDA::cudart)
+
+# 2. 强制 NVCC 纯 PTX 编译 (核心修复区)
+
+set(PTX_SOURCES Ptx/device_programs.cu)
 
 # 告诉 CMake 这是一个独立的对象库，专门用来处理 CUDA 文件
 add_library(DevicePrograms OBJECT ${PTX_SOURCES})
@@ -62,28 +68,40 @@ file(MAKE_DIRECTORY ${PTX_OUTPUT_DIR})
 add_custom_target(CompilePTX ALL
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_OBJECTS:DevicePrograms> "${PTX_OUTPUT_DIR}/"
     DEPENDS DevicePrograms
-    COMMENT "正在将生成的 PTX 文件提取到固定目录..."
+    COMMENT "moving PTX to target document."
 )
 
-# ==========================================
-# 3. 定义可执行文件
-# ==========================================
-# 注意：这里只有 HOST_SOURCES，干净利落！
-add_executable(OptixSim ${HOST_SOURCES})
-# 告诉 CMake：在打包 exe 之前，必须等 CompilePTX 将文件复制完毕
+
+# 原生 C++ 可执行程序 (你的传统入口)
+# 只编译 main.cpp，核心逻辑去链接 OptixEngineCore
+add_executable(OptixSim main.cpp)
+target_link_libraries(OptixSim PRIVATE OptixEngineCore)
 add_dependencies(OptixSim CompilePTX)
-
-# ==========================================
-# 4. 路径与库配置
-# ==========================================
-target_include_directories(OptixSim PRIVATE
-    ${PROJECT_SOURCE_DIR}
-    ${OPTIX_8_0_PATH}/include
-    ${CUDAToolkit_INCLUDE_DIRS}
-)
-
-# 终极魔法：将 PTX 输出文件夹的绝对路径，变成一个 C++ 宏传进代码里！
-# 这样 C++ 永远能在硬盘上准确找到生成的 PTX 文件。
 target_compile_definitions(OptixSim PRIVATE "PTX_DIR=\"${PTX_OUTPUT_DIR}\"")
 
-target_link_libraries(OptixSim PRIVATE CUDA::cudart)
+# Python 绑定层：Nanobind 模块
+# ==========================================
+# 确保在运行 CMake 前，当前的 Python 环境已安装 nanobind (pip install nanobind)
+find_package(Python 3.10 COMPONENTS Interpreter Development REQUIRED)
+# 打印出 CMake 实际抓到的 Python 路径，防止它阳奉阴违
+message(STATUS ">>> [CMake Debug]  Python : ${Python_EXECUTABLE}")
+
+execute_process(
+    COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
+    OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE NB_DIR)
+
+    # 打印出获取到的 nanobind 目录
+message(STATUS ">>> [CMake Debug]  Nanobind CMake: ${NB_DIR}")
+
+list(APPEND CMAKE_PREFIX_PATH "${NB_DIR}")
+find_package(nanobind CONFIG REQUIRED)
+
+# 编译胶水代码
+nanobind_add_module(optix_backend Bindings/OptixSionnaBinding.cpp)
+
+# 核心链接：让绑定模块能够调用引擎的核心函数
+target_link_libraries(optix_backend PRIVATE OptixEngineCore)
+
+# 确保 PTX 在 Python 模块加载前也准备好
+add_dependencies(optix_backend CompilePTX)
+target_compile_definitions(optix_backend PRIVATE "PTX_DIR=\"${PTX_OUTPUT_DIR}\"")

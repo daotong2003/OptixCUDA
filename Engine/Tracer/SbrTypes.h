@@ -54,13 +54,44 @@ namespace Engine {
 			float d;       // 距离常数 D
 		};
 
-		// 绝对精确的物理路径 (包含 Tx, 所有反射点, Rx)
-		struct ExactPath {
-			// 顶点数组：最大容量 = 最大弹跳数 + 起点 + 终点
-			float3 vertices[MAX_BOUNCE_DEPTH + 2];
-			int vertexCount; // 实际顶点数量 (如 1次弹跳 = 3个顶点)
-			bool isValid;    // 路径是否有效 (防平行未相交等数学异常)
-		};
+		// 绝对精确的物理路径 (包含 Tx, 所有反射点, Rx, 以及电磁计算所需全部物理量)
+	struct ExactPath {
+		// 1. 坐标节点: 顶点数组 = 最大弹跳数(3) + 起点(Tx) + 终点(Rx) = 5 个 float3
+		float3 vertices[MAX_BOUNCE_DEPTH + 2];                    // 60 bytes
+
+		// 2. 每次弹跳表面的法线
+		float3 normals[MAX_BOUNCE_DEPTH];                          // 36 bytes
+
+		// 3. 每次弹跳的入射方向 (归一化向量)
+		float3 k_i[MAX_BOUNCE_DEPTH];                              // 36 bytes
+
+		// 4. 每次弹跳的反射方向 (归一化向量)
+		float3 k_r[MAX_BOUNCE_DEPTH];                              // 36 bytes
+
+		// 5. 发射端的出发方向向量 (归一化)
+		float3 k_tx;                                               // 12 bytes
+
+		// 6. 接收端的到达方向向量 (归一化)
+		float3 k_rx;                                               // 12 bytes
+
+		// 7. 整条路径的物理飞行总距离
+		float total_distance;                                      // 4 bytes
+
+		// 8. 每次弹跳击中的平面 Label
+		int32_t hit_objects[MAX_BOUNCE_DEPTH];                     // 12 bytes
+
+		// 9. 实际顶点数量
+		int32_t vertexCount;                                       // 4 bytes
+
+		// 10. 路径是否有效
+		bool isValid;                                              // 1 byte
+
+		// 11. 手动补齐，使总大小精准等于 216 字节
+		uint8_t padding[3];                                        // 3 bytes
+	};
+
+	// 编译期终极防护：如果修改导致尺寸不是 216 字节，直接拒绝编译！
+	static_assert(sizeof(ExactPath) == 216, "ExactPath size must be exactly 216 bytes for Zero-Copy EM Computation!");
 
 		// GPU 端用于快速二分查找的平面字典条目
 		struct PlaneDictEntry {

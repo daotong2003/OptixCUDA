@@ -147,7 +147,20 @@ namespace Engine {
 			path.vertexCount = numBounces + 2;
 			path.isValid = false;
 
+			// [新增] 1. 初始化 hit_objects 为 -1，防止存在内存脏数据
+			// ==========================================================
+			for (int i = 0; i < MAX_BOUNCE_DEPTH; ++i) {
+				path.hit_objects[i] = -1;
+			}
+
 			if (numBounces == 0 || numBounces > MAX_BOUNCE_DEPTH) { out_paths[idx] = path; return; }
+
+			// [新增] 2. 从 SBR 拓扑阶段提取击中的物体 Label 并写入 ExactPath
+			// 这里的 plane_label 就是后续喂给 Sionna 匹配电磁材质的唯一凭证
+			// ==========================================================
+			for (int i = 0; i < numBounces; ++i) {
+				path.hit_objects[i] = topo.nodes[i].plane_label;
+			}
 
 			// 1. 查字典获取局部平面信息
 			LocalPlaneDictEntry planes[MAX_BOUNCE_DEPTH];
@@ -217,6 +230,62 @@ namespace Engine {
 			}
 			path.vertices[numBounces + 1] = rx; // 终点
 
+			// 【新增】：填充电磁计算所需物理量
+			// ------------------------------------------------------
+			// 1. 填充法线和 hit_objects
+			for (int i = 0; i < numBounces; ++i) {
+				path.normals[i] = planes[i].eq.normal;
+				path.hit_objects[i] = topo.nodes[i].plane_label;
+			}
+
+			// 2. 计算 total_distance 并填充方向向量
+			path.total_distance = 0.0f;
+
+			// 第一段：Tx -> 第一个反射点 (或直接到 Rx，如果 numBounces == 0)
+			if (numBounces == 0) {
+				float3 dir_tx_rx = make_float3(rx.x - tx.x, rx.y - tx.y, rx.z - tx.z);
+				float dist = sqrtf(dir_tx_rx.x * dir_tx_rx.x + dir_tx_rx.y * dir_tx_rx.y + dir_tx_rx.z * dir_tx_rx.z);
+				path.total_distance = dist;
+				if (dist > 1e-6f) {
+					path.k_tx = make_float3(dir_tx_rx.x / dist, dir_tx_rx.y / dist, dir_tx_rx.z / dist);
+					path.k_rx = make_float3(-dir_tx_rx.x / dist, -dir_tx_rx.y / dist, -dir_tx_rx.z / dist);
+				}
+			} else {
+				// 第一段：Tx -> hitPoints[0]
+				float3 dir_first = make_float3(hitPoints[0].x - tx.x, hitPoints[0].y - tx.y, hitPoints[0].z - tx.z);
+				float dist_first = sqrtf(dir_first.x * dir_first.x + dir_first.y * dir_first.y + dir_first.z * dir_first.z);
+				path.total_distance += dist_first;
+				if (dist_first > 1e-6f) {
+					path.k_tx = make_float3(dir_first.x / dist_first, dir_first.y / dist_first, dir_first.z / dist_first);
+				}
+
+				// 中间段：hitPoints[i-1] -> hitPoints[i]
+				for (int i = 1; i < numBounces; ++i) {
+					float3 dir_prev = make_float3(hitPoints[i].x - hitPoints[i - 1].x,
+					                              hitPoints[i].y - hitPoints[i - 1].y,
+					                              hitPoints[i].z - hitPoints[i - 1].z);
+					float dist_seg = sqrtf(dir_prev.x * dir_prev.x + dir_prev.y * dir_prev.y + dir_prev.z * dir_prev.z);
+					path.total_distance += dist_seg;
+
+					if (dist_seg > 1e-6f) {
+						path.k_i[i - 1] = make_float3(dir_prev.x / dist_seg, dir_prev.y / dist_seg, dir_prev.z / dist_seg);
+						path.k_r[i - 1] = make_float3(-dir_prev.x / dist_seg, -dir_prev.y / dist_seg, -dir_prev.z / dist_seg);
+					}
+				}
+
+				// 最后段：hitPoints[numBounces-1] -> Rx
+				float3 dir_last = make_float3(rx.x - hitPoints[numBounces - 1].x,
+				                              rx.y - hitPoints[numBounces - 1].y,
+				                              rx.z - hitPoints[numBounces - 1].z);
+				float dist_last = sqrtf(dir_last.x * dir_last.x + dir_last.y * dir_last.y + dir_last.z * dir_last.z);
+				path.total_distance += dist_last;
+				if (dist_last > 1e-6f) {
+					path.k_i[numBounces - 1] = make_float3(dir_last.x / dist_last, dir_last.y / dist_last, dir_last.z / dist_last);
+					path.k_rx = make_float3(-dir_last.x / dist_last, -dir_last.y / dist_last, -dir_last.z / dist_last);
+				}
+			}
+
+			path.vertexCount = numBounces + 2;
 			path.isValid = true;
 			out_paths[idx] = path;
 		}
