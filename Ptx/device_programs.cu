@@ -226,6 +226,8 @@ extern "C" __global__ void __raygen__los() {
 			if (isBatchSBR) {
 				current_topo->nodes[depth].instance_id = prd.hit_instance_id;
 				current_topo->nodes[depth].plane_label = prd.hit_plane_label;
+				// [新增] 将 PRD 中的材质 ID 写入到当前阶段的拓扑节点中
+				current_topo->nodes[depth].material_id = prd.hit_material;
 				current_topo->nodeCount = depth + 1; // 严丝合缝地记录有效拓扑
 			}
 

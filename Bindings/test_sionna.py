@@ -1,216 +1,236 @@
 import os
+import sys
 import numpy as np
 import tensorflow as tf
 from sionna.rt import load_scene, Transmitter, Receiver, PlanarArray, Paths
-
+from sionna.rt.solver_paths import PathsTmpData
 # ---------------------------------------------------------
-# 1. 定义与 C++ 严格对齐的内存结构 (216 bytes)
+# 1. 结构对齐：严格匹配 SbrTypes.h 中的 216 字节布局
 # ---------------------------------------------------------
+# 根据 SbrTypes.h，MAX_BOUNCE_DEPTH = 3
+# ExactPath 包含 vertices[5], normals[3], k_i[3], k_r[3], k_tx, k_rx, total_distance,
+# hit_objects[3], vertexCount, isValid, hit_materials[3]
 exact_path_dtype = np.dtype([
-    ('vertices', np.float32, (5, 3)),     # 60 bytes: 5 个顶点 (Tx + 3反射点 + Rx)
-    ('normals', np.float32, (3, 3)),      # 36 bytes: 3 次弹跳的表面法线
-    ('k_i', np.float32, (3, 3)),          # 36 bytes: 3 次弹跳的入射方向
-    ('k_r', np.float32, (3, 3)),          # 36 bytes: 3 次弹跳的反射方向
-    ('k_tx', np.float32, (3,)),           # 12 bytes: 发射端出发方向
-    ('k_rx', np.float32, (3,)),           # 12 bytes: 接收端到达方向
-    ('total_distance', np.float32, (1,)), # 4 bytes: 总飞行距离
-    ('hit_objects', np.int32, (3,)),      # 12 bytes: 3 次弹跳的平面 Label
-    ('vertexCount', np.int32),            # 4 bytes: 实际顶点数
-    ('isValid', np.bool_),                # 1 byte: 有效性标志
-    ('padding', np.uint8, (3,))           # 3 bytes: 对齐填充
+    ('vertices', np.float32, (5, 3)),
+    ('normals', np.float32, (3, 3)),
+    ('k_i', np.float32, (3, 3)),
+    ('k_r', np.float32, (3, 3)),
+    ('k_tx', np.float32, (3,)),
+    ('k_rx', np.float32, (3,)),
+    ('total_distance', np.float32),
+    ('hit_objects', np.int32, (3,)),
+    ('vertexCount', np.int32),
+    ('isValid', np.uint8),
+    ('hit_materials', np.uint8, (3,))
 ], align=False)
 
 
-def create_phantom_scene(label_dict):
-    """
-    根据 C++ 端的平面 Label，动态生成一个只有 1 个极小三角形的幽灵场景。
-    完美骗过 Sionna 的 TypeError('Only triangle meshes are supported') 检查。
-    """
-    # 1. 凭空捏造一个极小的单三角形 OBJ 文件 (边长 1 纳米)
+def create_nimbus_phantom_scene(unique_materials):
+    """模仿 NimbusRT，根据材质 ID 动态生成幽灵对象"""
     dummy_obj_path = "dummy_phantom.obj"
-    dummy_obj_content = """v 0 0 0
-v 1e-9 0 0
-v 0 1e-9 0
-f 1 2 3
-"""
     with open(dummy_obj_path, "w") as f:
-        f.write(dummy_obj_content)
+        f.write("v 0 0 0\nv 1e-9 0 0\nv 0 1e-9 0\nf 1 2 3\n")
 
-    # 2. 组装 Mitsuba XML，所有 Label 物体都指向这个 dummy OBJ
     xml_content = ['<scene version="2.0.0">']
-
-    for label in label_dict.keys():
-        xml_content.append(f'''
-        <shape type="obj" id="label_{label}">
-            <string name="filename" value="{dummy_obj_path}"/>
-        </shape>
-        ''')
+    for mat_id in unique_materials:
+        if mat_id != 255:
+            xml_content.append(
+                f'<shape type="obj" id="mat_obj_{mat_id}"><string name="filename" value="{dummy_obj_path}"/></shape>')
     xml_content.append('</scene>')
 
-    # 写入临时 XML
-    temp_xml = "phantom_scene.xml"
+    temp_xml = "nimbus_scene.xml"
     with open(temp_xml, "w") as f:
         f.write("\n".join(xml_content))
-
     return temp_xml
 
 
-# ---------------------------------------------------------
-# 2. 定义与 C++ 严格对齐的内存结构 (216 bytes)
-# ---------------------------------------------------------
-exact_path_dtype = np.dtype([
-    ('vertices', np.float32, (5, 3)),     # 60 bytes: 5 个顶点 (Tx + 3反射点 + Rx)
-    ('normals', np.float32, (3, 3)),      # 36 bytes: 3 次弹跳的表面法线
-    ('k_i', np.float32, (3, 3)),          # 36 bytes: 3 次弹跳的入射方向
-    ('k_r', np.float32, (3, 3)),          # 36 bytes: 3 次弹跳的反射方向
-    ('k_tx', np.float32, (3,)),           # 12 bytes: 发射端出发方向
-    ('k_rx', np.float32, (3,)),           # 12 bytes: 接收端到达方向
-    ('total_distance', np.float32, (1,)), # 4 bytes: 总飞行距离
-    ('hit_objects', np.int32, (3,)),      # 12 bytes: 3 次弹跳的平面 Label
-    ('vertexCount', np.int32),            # 4 bytes: 实际顶点数
-    ('isValid', np.bool_),                # 1 byte: 有效性标志
-    ('padding', np.uint8, (3,))           # 3 bytes: 对齐填充
-], align=False)
+def print_tensor_info(name, tensor):
+    if isinstance(tensor, np.ndarray):
+        print(f"  {name}: np.ndarray, shape={tensor.shape}, dtype={tensor.dtype}")
+    elif isinstance(tensor, tf.Tensor):
+        print(f"  {name}: tf.Tensor, shape={tensor.shape}, dtype={tensor.dtype}")
+    else:
+        print(f"  {name}: {type(tensor).__name__}, shape={getattr(tensor, 'shape', 'N/A')}")
 
 
 # ---------------------------------------------------------
-# 3. 核心电磁计算接入函数
+# 2. 核心桥接逻辑
 # ---------------------------------------------------------
-def run_sionna_pure_em(raw_buffer):
-    # 1. 映射您的 C++ Label 到具体的电磁材质
-    # 假设您的场景里 Label 6 是混凝土墙，Label 14 是金属机器
-    cpp_material_map = {
-        6: "itu_concrete",
-        14: "itu_metal",
-        2: "itu_glass"
-    }
-
-    print(">>> [Sionna EM] 1. 正在初始化幽灵材质场景...")
-    phantom_xml = create_phantom_scene(cpp_material_map)
-    sionna_scene = load_scene(phantom_xml)
-    sionna_scene.frequency = 3.5e9  # 设置 5G NR 载波频率
-
-    # 将 Sionna 内置的电磁属性赋予这些幽灵物体，并建立 ID 映射表
-    label_to_sionna_id = {}
-    for label, mat_name in cpp_material_map.items():
-        obj_name = f"label_{label}"
-        sionna_scene.objects[obj_name].radio_material = mat_name
-        label_to_sionna_id[label] = sionna_scene.objects[obj_name].object_id
-
-    # 2. 使用 Sionna 设置天线与收发机 (这正是你想要的特性)
-    print(">>> [Sionna EM] 2. 正在配置 MIMO 天线阵列...")
-    # 发射端配置 4x4 平面天线阵列
-    tx_array = PlanarArray(num_rows=4, num_cols=4, vertical_spacing=0.5, horizontal_spacing=0.5, pattern="dipole")
-    # 接收端配置单天线
-    rx_array = PlanarArray(num_rows=1, num_cols=1, pattern="isotropic")
-
-    tx = Transmitter("tx1", position=[26.5, 4.0, 2.0], orientation=[0, 0, 0])
-    tx.array = tx_array
-    sionna_scene.add(tx)
-
-    rx = Receiver("rx1", position=[25.5, 12.0, 2.0], orientation=[0, 0, 0])
-    rx.array = rx_array
-    sionna_scene.add(rx)
-
-    # 3. Zero-Copy 提取 C++ 的几何折线
-    print(">>> [Sionna EM] 3. 正在重组 C++ 几何拓扑...")
-    paths_np = raw_buffer.view(exact_path_dtype)
-    num_paths = len(paths_np)
-    max_bounces = 3
+def run_sionna_nimbus_final(raw_buffer, tx_pos, rx_pos):
+    paths_np = np.frombuffer(raw_buffer, dtype=exact_path_dtype)
+    valid_paths = paths_np[paths_np['isValid'] == 1]
+    num_paths = len(valid_paths)
 
     if num_paths == 0:
+        print(">>> [警告] 未发现有效路径。")
         return
 
-    expand_dims = [1, 1, 1, 1, 1, num_paths]
+    print(f">>> [调试] 有效路径数量: {num_paths}")
 
-    # [核心：切片与提取]
-    reflector_pts = paths_np['vertices'][:, 1:max_bounces + 1, :]
-    vertices_tf = tf.reshape(tf.convert_to_tensor(reflector_pts), expand_dims + [max_bounces, 3])
+    # A. 初始化场景与材质映射
+    unique_mats = np.unique(valid_paths['hit_materials'])
+    sionna_scene = load_scene(create_nimbus_phantom_scene(unique_mats))
+    sionna_scene.frequency = 3.5e9
+    sionna_scene.synthetic_array = True
 
-    # [核心：转换材质 ID] 把 C++ 的 6, 14 转换成 Sionna 内部的 object_id
-    raw_labels = paths_np['hit_objects']
-    sionna_ids = np.zeros_like(raw_labels)
-    for i in range(num_paths):
-        for b in range(max_bounces):
-            lbl = raw_labels[i, b]
-            sionna_ids[i, b] = label_to_sionna_id.get(lbl, 0)  # 兜底材质 ID 0
+    for mat_id in unique_mats:
+        if mat_id == 255:
+            continue
+        obj = sionna_scene.objects[f"mat_obj_{mat_id}"]
+        obj.radio_material = "itu_concrete"
+        obj.object_id = int(mat_id)
 
-    objects_tf = tf.reshape(tf.convert_to_tensor(sionna_ids), expand_dims + [max_bounces])
+    # B. 天线配置 (4x4 MIMO)
+    sionna_scene.tx_array = PlanarArray(4, 4, 0.5, 0.5, "dipole", "V")
+    sionna_scene.rx_array = PlanarArray(1, 1, 0.5, 0.5, "iso", "V")
 
-    bounce_counts = paths_np['vertexCount'] - 2
-    mask_tf = tf.reshape(tf.sequence_mask(bounce_counts, maxlen=max_bounces), expand_dims + [max_bounces])
+    tx = Transmitter("tx1", position=tx_pos)
+    tx.array = sionna_scene.tx_array
+    sionna_scene.add(tx)
+    rx = Receiver("rx1", position=rx_pos)
+    rx.array = sionna_scene.rx_array
+    sionna_scene.add(rx)
 
-    # 4. 召唤 Sionna EM 求解器！
-    print(">>> [Sionna EM] 4. 注入 Sionna Paths，开始电磁解算...")
-    paths = Paths(
-        sources=sionna_scene.transmitters,
-        targets=sionna_scene.receivers,
-        scene=sionna_scene,
-        vertices=vertices_tf,
-        objects=objects_tf,
-        mask=mask_tf
-    )
+    # C. 张量维度对齐
+    # Sionna 0.19 shape 约定（参考 solver_paths.py 源码）：
+    #   Paths.vertices:       [max_depth, num_rx, num_tx, num_paths, 3]
+    #   Paths.objects:        [max_depth, num_rx, num_tx, num_paths]
+    #   Paths.mask:           [num_rx, num_tx, num_paths]
+    #   Paths.theta_t/phi_t:  [num_rx, num_tx, num_paths]
+    #   PathsTmpData.normals: [max_depth, num_rx, num_tx, num_paths, 3]
+    #   PathsTmpData.k_i:     [max_depth+1, num_rx, num_tx, num_paths, 3]
+    #   PathsTmpData.k_r:     [max_depth, num_rx, num_tx, num_paths, 3]
+    #   PathsTmpData.k_tx:    [num_rx, num_tx, num_paths, 3]
+    #   PathsTmpData.k_rx:    [num_rx, num_tx, num_paths, 3]
+    #   PathsTmpData.total_distance: [num_rx, num_tx, num_paths]
+    # 注意：depth 维度在最前面！
+    sources = tf.convert_to_tensor([tx_pos], dtype=tf.float32)
+    targets = tf.convert_to_tensor([rx_pos], dtype=tf.float32)
 
-    # 取消内置的延迟归一化（因为我们的坐标已经是绝对精确的了）
-    paths.normalize_delays = False
+    max_depth = 3
+    num_rx, num_tx = 1, 1
 
-    # 解算复数衰减(a)和传播时延(tau)
-    a, tau = paths.apply_em_solver()
+    def to_tf(np_arr, shape, dtype=tf.float32):
+        return tf.reshape(tf.convert_to_tensor(np.ascontiguousarray(np_arr), dtype=dtype), shape)
+
+    k_tx_np = valid_paths['k_tx']
+    k_rx_np = valid_paths['k_rx']
+
+    print("\n>>> [调试] 原始 C++ 数据 shape:")
+    print_tensor_info("  valid_paths['vertices']", valid_paths['vertices'])
+    print_tensor_info("  valid_paths['normals']", valid_paths['normals'])
+    print_tensor_info("  valid_paths['k_i']", valid_paths['k_i'])
+    print_tensor_info("  valid_paths['k_r']", valid_paths['k_r'])
+    print_tensor_info("  valid_paths['k_tx']", k_tx_np)
+    print_tensor_info("  valid_paths['k_rx']", k_rx_np)
+    print_tensor_info("  valid_paths['total_distance']", valid_paths['total_distance'])
+    print_tensor_info("  valid_paths['hit_objects']", valid_paths['hit_objects'])
+
+    theta_t = to_tf(np.arccos(np.clip(k_tx_np[:, 2], -1.0, 1.0)), [num_rx, num_tx, num_paths])
+    phi_t = to_tf(np.arctan2(k_tx_np[:, 1], k_tx_np[:, 0]), [num_rx, num_tx, num_paths])
+    theta_r = to_tf(np.arccos(np.clip(k_rx_np[:, 2], -1.0, 1.0)), [num_rx, num_tx, num_paths])
+    phi_r = to_tf(np.arctan2(k_rx_np[:, 1], k_rx_np[:, 0]), [num_rx, num_tx, num_paths])
+
+    ref_paths = Paths(sources, targets, sionna_scene)
+    ref_paths.types = Paths.SPECULAR
+    dif_paths = Paths(sources, targets, sionna_scene)
+    dif_paths.types = Paths.DIFFRACTED
+    sct_paths = Paths(sources, targets, sionna_scene)
+    sct_paths.types = Paths.SCATTERED
+    ris_paths = Paths(sources, targets, sionna_scene)
+    ris_paths.types = Paths.RIS
+
+    tmp_ref = PathsTmpData(sources, targets, dtype=tf.complex64)
+    tmp_dif = PathsTmpData(sources, targets, dtype=tf.complex64)
+    tmp_sct = PathsTmpData(sources, targets, dtype=tf.complex64)
+    tmp_ris = PathsTmpData(sources, targets, dtype=tf.complex64)
+
+    # vertices: C++ (num_paths, 5, 3) -> 取交互点 [:, 1:4, :] -> (num_paths, 3, 3)
+    #         -> transpose -> (3, num_paths, 3) -> reshape -> (3, 1, 1, num_paths, 3)
+    vertices_np = valid_paths['vertices'][:, 1:max_depth + 1, :]
+    ref_paths.vertices = to_tf(vertices_np.transpose(1, 0, 2),
+                               [max_depth, num_rx, num_tx, num_paths, 3])
+
+    # objects: C++ (num_paths, 3) -> transpose -> (3, num_paths) -> reshape -> (3, 1, 1, num_paths)
+    mat_ids = np.where(valid_paths['hit_materials'] == 255, -1, valid_paths['hit_materials'])
+    ref_paths.objects = to_tf(mat_ids.transpose(1, 0),
+                              [max_depth, num_rx, num_tx, num_paths], tf.int32)
+
+    ref_paths.mask = tf.ones([num_rx, num_tx, num_paths], dtype=tf.bool)
+    ref_paths.theta_t, ref_paths.phi_t = theta_t, phi_t
+    ref_paths.theta_r, ref_paths.phi_r = theta_r, phi_r
+    ref_paths.tau = to_tf(valid_paths['total_distance'] / 299792458.0,
+                          [num_rx, num_tx, num_paths])
+
+    # normals: C++ (num_paths, 3, 3) -> transpose -> (3, num_paths, 3) -> reshape -> (3, 1, 1, num_paths, 3)
+    tmp_ref.normals = to_tf(valid_paths['normals'].transpose(1, 0, 2),
+                            [max_depth, num_rx, num_tx, num_paths, 3])
+
+    # k_i: C++ (num_paths, 3, 3) -> 需要追加第4项(到达接收端方向=-k_rx)
+    #     -> (num_paths, 4, 3) -> transpose -> (4, num_paths, 3) -> reshape -> (4, 1, 1, num_paths, 3)
+    k_i_np = valid_paths['k_i']
+    k_i_full = np.concatenate([k_i_np, -k_rx_np[:, np.newaxis, :]], axis=1)
+    tmp_ref.k_i = to_tf(k_i_full.transpose(1, 0, 2),
+                        [max_depth + 1, num_rx, num_tx, num_paths, 3])
+
+    # k_r: C++ (num_paths, 3, 3) -> transpose -> (3, num_paths, 3) -> reshape -> (3, 1, 1, num_paths, 3)
+    tmp_ref.k_r = to_tf(valid_paths['k_r'].transpose(1, 0, 2),
+                        [max_depth, num_rx, num_tx, num_paths, 3])
+
+    # k_tx / k_rx: [num_rx, num_tx, num_paths, 3]
+    tmp_ref.k_tx = to_tf(k_tx_np, [num_rx, num_tx, num_paths, 3])
+    tmp_ref.k_rx = to_tf(k_rx_np, [num_rx, num_tx, num_paths, 3])
+
+    # total_distance: [num_rx, num_tx, num_paths]
+    tmp_ref.total_distance = to_tf(valid_paths['total_distance'],
+                                   [num_rx, num_tx, num_paths])
+
+    print("\n>>> [调试] 转换为 TensorFlow 后的 shape:")
+    print_tensor_info("  ref_paths.vertices", ref_paths.vertices)
+    print_tensor_info("  ref_paths.objects", ref_paths.objects)
+    print_tensor_info("  ref_paths.mask", ref_paths.mask)
+    print_tensor_info("  ref_paths.theta_t", ref_paths.theta_t)
+    print_tensor_info("  ref_paths.phi_t", ref_paths.phi_t)
+    print_tensor_info("  ref_paths.theta_r", ref_paths.theta_r)
+    print_tensor_info("  ref_paths.phi_r", ref_paths.phi_r)
+    print_tensor_info("  ref_paths.tau", ref_paths.tau)
+    print_tensor_info("  tmp_ref.normals", tmp_ref.normals)
+    print_tensor_info("  tmp_ref.k_i", tmp_ref.k_i)
+    print_tensor_info("  tmp_ref.k_r", tmp_ref.k_r)
+    print_tensor_info("  tmp_ref.k_tx", tmp_ref.k_tx)
+    print_tensor_info("  tmp_ref.k_rx", tmp_ref.k_rx)
+    print_tensor_info("  tmp_ref.total_distance", tmp_ref.total_distance)
+
+    path_tuple = (ref_paths, dif_paths, sct_paths, ris_paths,
+                  tmp_ref, tmp_dif, tmp_sct, tmp_ris)
+
+    print("\n>>> [Sionna EM] 正在执行 Native 注入...")
+    computed_paths = sionna_scene.compute_fields(*path_tuple, check_scene=False)
 
     print("\n========================================================")
-    print(">>> [成功] C++ 几何与 Sionna 电磁/天线 完美合体！")
-    print(f"  - 包含天线方向图增益的衰减系数 (a) shape: {a.shape}")
-    print(f"  - 传播时延 (tau) shape: {tau.shape}")
-
-    # 甚至可以直接生成带 MIMO 效应的信道冲激响应 CIR！
-    # cir = paths.cir()
+    print(">>> [成功] C++ -> Sionna 链路完美贯通！")
+    print(f"  - 衰减矩阵 (a) shape: {computed_paths.a.shape}")
+    print(f"  - 时延矩阵 (tau) shape: {computed_paths.tau.shape}")
     print("========================================================")
 
 
 if __name__ == "__main__":
-    import sys
-    import gc
-
-    # [核心修复] Python 3.8+ 必须手动注入底层依赖库 (CUDA) 的路径
-    # =====================================================================
-    # 1. 注入 CUDA bin 目录 (cudart64_118.dll 所在位置)
     cuda_bin_path = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\bin"
+    target_path = r"E:\RT_software\Clanguage\PointRT\out\build\x64-RelWithDebInfo\RelWithDebInfo"
     if os.path.exists(cuda_bin_path) and hasattr(os, 'add_dll_directory'):
         os.add_dll_directory(cuda_bin_path)
-        print(f">>> [DLL 注入] 成功添加 CUDA 路径: {cuda_bin_path}")
-    else:
-        print(f"[警告] 找不到 CUDA 路径: {cuda_bin_path}，可能导致 DLL 加载失败！")
-
-    # 2. 将编译输出目录添加到 sys.path (用于寻找 .pyd)
-    target_path = r"E:\RT_software\Clanguage\PointRT\out\build\x64-RelWithDebInfo\RelWithDebInfo"
-    sys.path.append(target_path)
-
-    # 同时也将目标目录加入 DLL 搜索路径 (防患于未然)
     if os.path.exists(target_path) and hasattr(os, 'add_dll_directory'):
         os.add_dll_directory(target_path)
+    sys.path.append(target_path)
 
-    print(">>> [Python 端] 正在尝试导入 optix_backend...")
-
-    try:
-        import optix_backend
-
-        print(">>> [Python 端] 成功导入 optix_backend 模块！")
-    except ImportError as e:
-        print(f"\n[致命错误] 导入失败: {e}")
-        print(
-            "如果依然失败，请检查 C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin 目录下是否存在 cudart64_xxx.dll")
-        sys.exit(1)
-
-    # 记得把你的 out/build/x64-RelWithDebInfo/RelWithDebInfo 目录加入 sys.path
-    # 并且 os.add_dll_directory CUDA bin 目录
     import optix_backend
 
     ply_path = r"E:\RT_software\Clanguage\sy.ply"
     ptx_path = r"E:\RT_software\Clanguage\PointRT\out\build\x64-RelWithDebInfo\Ptx\device_programs.ptx"
 
     engine = optix_backend.OptixEngineBridge(ply_path, ptx_path)
-    # 调用 C++，拿到纯物理几何路径
-    raw_buffer = engine.compute_paths(26.5, 4.0, 2.0, 25.5, 12.0, 2.0, 0.5, 2000000)
+    tx_pos = [26.5, 4.0, 2.0]
+    rx_pos = [25.5, 12.0, 2.0]
 
-    # 将几何路径喂给 Sionna 算电磁和 MIMO 天线
-    run_sionna_pure_em(raw_buffer)
+    raw_buffer = engine.compute_paths(*tx_pos, *rx_pos, 0.5, 2000000)
+    run_sionna_nimbus_final(raw_buffer, tx_pos, rx_pos)

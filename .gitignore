@@ -363,3 +363,8 @@ MigrationBackup/
 FodyWeavers.xsd
 
 *.ply
+
+# NimbusRT reference files (local only, not for upload)
+_C.py
+scene.py
+params.py
