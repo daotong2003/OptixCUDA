@@ -381,3 +381,7 @@ phantom_scene.xml
 Result/
 Bindings/Result/
 Others/
+
+# Keep local workspace metadata and generated folders out of repository
+out/
+.github/
