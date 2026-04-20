@@ -78,7 +78,7 @@ private:
 public:
 	// 构造函数：执行原本 main.cpp 里的 [阶段零] 引擎初始化与物理场景构建
 	OptixEngineBridge(const std::string& ply_path, const std::string& ptx_path) {
-		std::cout << ">>> [Bridge] 初始化 OptiX 引擎环境...\n";
+//		std::cout << ">>> [Bridge] 初始化 OptiX 引擎环境...\n";
 		optixManager = std::make_unique<Core::OptixContextManager>();
 		geometryManager = std::make_unique<Core::GeometryManager>(optixManager->getContext());
 		sceneManager = std::make_unique<Core::SceneManager>(optixManager->getContext());
@@ -118,7 +118,7 @@ public:
 		size_t cloudBytes = rawCloud.size() * sizeof(Geometry::Point);
 		CUDA_CHECK(cudaMalloc(&d_globalCloud, cloudBytes));
 		CUDA_CHECK(cudaMemcpy(d_globalCloud, rawCloud.data(), cloudBytes, cudaMemcpyHostToDevice));
-		std::cout << ">>> [Bridge] 引擎就绪！随时可以接收 Python 计算请求。\n";
+//		std::cout << ">>> [Bridge] 引擎就绪！随时可以接收 Python 计算请求。\n";
 	}
 
 	~OptixEngineBridge() {

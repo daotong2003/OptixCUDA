@@ -15,7 +15,7 @@ namespace Engine {
 		}
 
 		OptixContextManager::OptixContextManager() {
-			std::cout << "[System] 正在初始化底层硬件环境...\n";
+//			std::cout << "[System] 正在初始化底层硬件环境...\n";
 
 			// 1. 唤醒 CUDA
 			CUDA_CHECK(cudaFree(0));
@@ -25,11 +25,11 @@ namespace Engine {
 			if (numDevices == 0) {
 				throw std::runtime_error("未找到支持 CUDA 的显卡！");
 			}
-			std::cout << "[System] 成功检测到 " << numDevices << " 张 CUDA 显卡。\n";
+//			std::cout << "[System] 成功检测到 " << numDevices << " 张 CUDA 显卡。\n";
 
 			// 2. 初始化 OptiX 函数表
 			OPTIX_CHECK(optixInit());
-			std::cout << "[System] OptiX API 初始化成功！\n";
+//			std::cout << "[System] OptiX API 初始化成功！\n";
 
 			// 3. 创建 OptiX 设备上下文
 			OptixDeviceContextOptions options = {};
@@ -37,13 +37,13 @@ namespace Engine {
 			options.logCallbackLevel = 2;
 
 			OPTIX_CHECK(optixDeviceContextCreate(0, &options, &context));
-			std::cout << "[System] OptiX 上下文创建成功，引擎已就绪！\n";
+//			std::cout << "[System] OptiX 上下文创建成功，引擎已就绪！\n";
 		}
 
 		OptixContextManager::~OptixContextManager() {
 			if (context != nullptr) {
 				optixDeviceContextDestroy(context);
-				std::cout << "[System] OptiX 上下文已安全销毁，显存资源释放完毕。\n";
+//				std::cout << "[System] OptiX 上下文已安全销毁，显存资源释放完毕。\n";
 			}
 		}
 	} // namespace Core

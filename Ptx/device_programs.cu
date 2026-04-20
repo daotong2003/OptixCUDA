@@ -162,7 +162,7 @@ extern "C" __global__ void __raygen__los() {
 
 			if (prd.hit_status == 1) {
 				isOccluded = true;
-				printf("[遮挡] 路径 %d 被 Label %d 拦截！\n", idx, prd.hit_plane_label);
+				// [disabled] printf
 				break; // 一段被挡，整条作废
 			}
 		}
